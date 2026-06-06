@@ -45,6 +45,7 @@ _price_history: dict[str, list] = {}      # coin -> [(ts, price), ...] rolling 2
 _move_alerted: dict[str, float] = {}      # "{tg_id}_{coin}_{tier}" -> last alert ts
 _poll_errors: dict[int, int] = {}         # tg_id -> consecutive error count
 _poll_error_alerted: set = set()          # tg_ids already notified this error streak
+_last_fill_ts: dict[int, float] = {}      # tg_id -> ms timestamp of newest fill already notified
 PRICE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "price_history.json")
 
 CONFIRM_TTL = 60
@@ -54,7 +55,7 @@ DIGEST_TIME = datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc)  # m
 MOVE_1H_PCT  = 3.0    # % move in 1 hour to trigger quick-move alert
 MOVE_24H_PCT = 8.0    # % move in 24 hours to trigger big-move alert
 MOVE_COOLDOWN = 2 * 3600  # seconds before re-alerting same coin+tier
-WEB_APP_URL    = "https://whynotvlad.github.io/hl-trade/open.html?v=9"
+WEB_APP_URL    = "https://whynotvlad.github.io/hl-trade/open.html?v=10"
 LADDER_FORM_URL = "https://whynotvlad.github.io/hl-trade/ladder.html?v=2"
 
 QUICK_KEYS = ReplyKeyboardMarkup(
@@ -320,6 +321,48 @@ def _fmt_orders(orders: list) -> str:
     return "\n".join(lines)
 
 
+def _order_tag(order: dict) -> str:
+    """Return a compact one-line label for an order."""
+    otype = order.get("orderType", "")
+    side  = "B" if order.get("side") == "B" else "S"
+    px    = float(order.get("limitPx", 0))
+    sz    = order.get("sz", "?")
+    oid   = order.get("oid", "")
+    if "Take Profit" in otype:
+        return f"   🎯 TP @ ${px:,.2f}  ({sz})  [oid:{oid}]"
+    if "Stop" in otype:
+        return f"   🛑 SL @ ${px:,.2f}  ({sz})  [oid:{oid}]"
+    side_lbl = "Buy" if side == "B" else "Sell"
+    return f"   📌 {side_lbl} limit @ ${px:,.2f}  ({sz})  [oid:{oid}]"
+
+
+def _position_text_with_orders(pos: dict, prices: dict, orders: list) -> str:
+    """Position card that also shows its attached TP/SL and any entry orders."""
+    size    = float(pos["szi"])
+    is_long = size > 0
+    pnl     = float(pos.get("unrealizedPnl", 0))
+    pnl_str = f"+${pnl:,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
+    mark    = prices.get(pos["coin"])
+    mark_str = f"${float(mark):,.2f}" if mark else "—"
+    lev     = pos.get("leverage", {})
+    liq     = pos.get("liquidationPx")
+    liq_line = f"\n   Liq:     ${float(liq):,.2f} ⚠️" if liq else ""
+
+    lines = [
+        f"{'🟢' if is_long else '🔴'} {pos['coin']} {'LONG' if is_long else 'SHORT'}  "
+        f"{lev.get('value')}x {lev.get('type', '')}",
+        f"   Size:    {abs(size)}",
+        f"   Entry:   ${float(pos['entryPx']):,.2f}   Mark: {mark_str}",
+        f"   PnL:     {pnl_str} {'📈' if pnl >= 0 else '📉'}"
+        f"{liq_line}",
+    ]
+    if orders:
+        lines.append("   ─")
+        for o in orders:
+            lines.append(_order_tag(o))
+    return "\n".join(lines)
+
+
 # ── commands ──────────────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -330,10 +373,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if registered:
         await update.message.reply_text(
             f"👋 Welcome back, {name}!\n\n"
-            "/positions — open positions\n"
-            "/orders — resting orders\n"
+            "/book — positions, orders & balance\n"
             "/price BTC — current price\n"
             "/pnl — 7-day realised PnL\n"
+            "/stats — win rate & analytics\n"
             "/risk — margin & liquidation risk\n\n"
             "Need help? /help or /help <command>",
             reply_markup=QUICK_KEYS,
@@ -367,8 +410,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = [
             "Commands\n",
             "Account",
-            "/positions — open positions & balance",
-            "/orders — resting orders",
+            "/book — positions, orders & balance (full book)",
+            "/positions — alias for /book",
             "/pnl — 7-day realised PnL",
             "/risk — margin & liquidation risk",
             "/chart <coin> [5m|15m|1h|4h|1d] — candlestick chart",
@@ -447,15 +490,7 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         result = entry["fn"]()
         await update.message.reply_text(_fmt_result(result))
-        # Show updated positions and orders after every confirmed trade
-        client = _get_client(update.effective_user.id)
-        state  = client.get_positions()
-        prices = client.get_prices()
-        spot   = client.get_spot_usdc()
-        await update.message.reply_text(_fmt_positions(state, prices, spot))
-        orders = client.get_open_orders()
-        if orders:
-            await update.message.reply_text(_fmt_orders(orders))
+        await cmd_book(update, context)
     except Exception as e:
         await update.message.reply_text(f"Order failed: {e}")
 
@@ -492,56 +527,8 @@ def _position_text(pos: dict, prices: dict) -> str:
 
 
 async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await _guard(update):
-        return
-    try:
-        client = _get_client(update.effective_user.id)
-        state = client.get_positions()
-        prices = client.get_prices()
-        spot = client.get_spot_usdc()
-
-        open_positions = [
-            e for e in state.get("assetPositions", [])
-            if float(e["position"]["szi"]) != 0
-        ]
-
-        if not open_positions:
-            summary = state.get("marginSummary", {})
-            perp = float(summary.get("accountValue", 0))
-            await update.message.reply_text(
-                f"No open positions.\n\n"
-                f"💰 Balance\n"
-                f"   Perp: ${perp:,.2f}\n"
-                f"   Spot: ${spot:,.2f}"
-            )
-            return
-
-        for e in open_positions:
-            pos = e["position"]
-            coin = pos["coin"]
-            await update.message.reply_text(
-                _position_text(pos, prices),
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("❌ Close Full",    callback_data=f"close_full:{coin}"),
-                        InlineKeyboardButton("✂️ Close Partial", callback_data=f"close_partial:{coin}"),
-                    ],
-                    [
-                        InlineKeyboardButton("🎯 Set TP", callback_data=f"set_tp:{coin}"),
-                        InlineKeyboardButton("🛑 Set SL", callback_data=f"set_sl:{coin}"),
-                    ],
-                ]),
-            )
-
-        summary = state.get("marginSummary", {})
-        perp = float(summary.get("accountValue", 0))
-        await update.message.reply_text(
-            f"💰 Balance\n"
-            f"   Perp: ${perp:,.2f}\n"
-            f"   Spot: ${spot:,.2f}"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+    """Alias for /book — kept for backwards compatibility."""
+    await cmd_book(update, context)
 
 
 async def handle_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -550,7 +537,12 @@ async def handle_close_callback(update: Update, context: ContextTypes.DEFAULT_TY
     tg_id = query.from_user.id
     if not _is_allowed(tg_id):
         return
-    action, coin = query.data.split(":", 1)
+
+    parts = query.data.split(":", 2)
+    action = parts[0]
+    coin   = parts[1] if len(parts) > 1 else ""
+    extra  = parts[2] if len(parts) > 2 else ""
+
     try:
         client = _get_client(tg_id)
         pos = client._find_position(coin)
@@ -559,27 +551,33 @@ async def handle_close_callback(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
         pos_size = float(pos["szi"])
-        is_long = pos_size > 0
-        price = client.get_mid_price(coin)
+        is_long  = pos_size > 0
+        price    = client.get_mid_price(coin)
 
-        if action == "close_full":
-            close_size = abs(pos_size)
-            pnl = (price - float(pos["entryPx"])) * close_size * (1 if is_long else -1)
-            pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
-            preview = (
-                f"Order Preview\n\n"
-                f"{'🟢' if is_long else '🔴'} Close {coin} {'LONG' if is_long else 'SHORT'}\n"
-                f"   Size:    {close_size} (full)\n"
-                f"   Price:   ~${price:,.2f}\n"
-                f"   Est PnL: {pnl_str} {'📈' if pnl >= 0 else '📉'}\n\n"
-                f"Send /confirm to execute or /dismiss to cancel.\n"
-                f"Expires in {CONFIRM_TTL}s."
+        # ── close_pct: 25 / 50 / 100 — executes immediately, no /confirm ─────
+        if action == "close_pct":
+            pct        = int(extra)
+            close_size = round(abs(pos_size) * pct / 100, 8)
+            pnl        = (price - float(pos["entryPx"])) * close_size * (1 if is_long else -1)
+            pnl_str    = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+            label      = "full" if pct == 100 else f"{pct}%"
+
+            await context.bot.send_message(
+                chat_id=tg_id,
+                text=(
+                    f"Closing {label} of {coin} {'LONG' if is_long else 'SHORT'} "
+                    f"({close_size} @ ~${price:,.2f})…"
+                ),
             )
-            _store_pending(
-                tg_id, preview,
-                lambda c=coin: client.close_position(coin=c, size=None),
+            client.close_position(coin=coin, size=None if pct == 100 else close_size)
+            await context.bot.send_message(
+                chat_id=tg_id,
+                text=(
+                    f"✅ Closed {label} of {coin}\n"
+                    f"   Price:   ~${price:,.2f}\n"
+                    f"   Est PnL: {pnl_str} {'📈' if pnl >= 0 else '📉'}"
+                ),
             )
-            await context.bot.send_message(chat_id=tg_id, text=preview)
 
         elif action == "close_partial":
             _awaiting_partial[tg_id] = coin
@@ -1338,11 +1336,104 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Alias for /book — kept for backwards compatibility."""
+    await cmd_book(update, context)
+
+
+async def cmd_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified account book: positions grouped with their orders + pending entries + balance."""
     if not await _guard(update):
         return
     try:
-        orders = _get_client(update.effective_user.id).get_open_orders()
-        await update.message.reply_text(_fmt_orders(orders))
+        client  = _get_client(update.effective_user.id)
+        state   = client.get_positions()
+        prices  = client.get_prices()
+        spot    = client.get_spot_usdc()
+        orders  = client.get_open_orders()
+        summary = state.get("marginSummary", {})
+        perp    = float(summary.get("accountValue", 0))
+
+        open_positions = [
+            e["position"] for e in state.get("assetPositions", [])
+            if float(e["position"]["szi"]) != 0
+        ]
+
+        # Group orders by coin
+        orders_by_coin: dict[str, list] = {}
+        for o in orders:
+            orders_by_coin.setdefault(o.get("coin", ""), []).append(o)
+
+        position_coins = {p["coin"] for p in open_positions}
+
+        # ── one card per position ─────────────────────────────────────────────
+        if not open_positions and not orders:
+            await update.message.reply_text(
+                f"No open positions or orders.\n\n"
+                f"💰 Balance\n"
+                f"   Perp: ${perp:,.2f}\n"
+                f"   Spot: ${spot:,.2f}",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "⚡ Open Trade",
+                        web_app=WebAppInfo(url=f"{WEB_APP_URL}&bal={perp:.2f}")
+                    )
+                ]]),
+            )
+            return
+
+        for pos in open_positions:
+            coin      = pos["coin"]
+            coin_ords = orders_by_coin.get(coin, [])
+            await update.message.reply_text(
+                _position_text_with_orders(pos, prices, coin_ords),
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("❌ Close 100%", callback_data=f"close_pct:{coin}:100"),
+                        InlineKeyboardButton("✂️ 50%",        callback_data=f"close_pct:{coin}:50"),
+                        InlineKeyboardButton("✂️ 25%",        callback_data=f"close_pct:{coin}:25"),
+                    ],
+                    [
+                        InlineKeyboardButton("🎯 Set TP", callback_data=f"set_tp:{coin}"),
+                        InlineKeyboardButton("🛑 Set SL", callback_data=f"set_sl:{coin}"),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "🪜 Ladder Close",
+                            web_app=WebAppInfo(url=f"{LADDER_FORM_URL}&coin={coin}")
+                        ),
+                    ],
+                ]),
+            )
+
+        # ── pending entry orders for coins with no position ───────────────────
+        entry_orders = [
+            o for coin, ords in orders_by_coin.items()
+            if coin not in position_coins
+            for o in ords
+        ]
+        if entry_orders:
+            lines = ["📋 Pending Entries\n"]
+            for o in entry_orders:
+                side = "BUY" if o.get("side") == "B" else "SELL"
+                coin = o.get("coin", "?")
+                px   = float(o.get("limitPx", 0))
+                sz   = o.get("sz", "?")
+                oid  = o.get("oid", "")
+                lines.append(f"{'🟢' if side == 'BUY' else '🔴'} {coin} {side}  ${px:,.2f}  ({sz})  [oid:{oid}]")
+            await update.message.reply_text("\n".join(lines))
+
+        # ── balance footer with Open Trade button ─────────────────────────────
+        await update.message.reply_text(
+            f"💰 Balance\n"
+            f"   Perp: ${perp:,.2f}\n"
+            f"   Spot: ${spot:,.2f}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "⚡ Open Trade",
+                    web_app=WebAppInfo(url=f"{WEB_APP_URL}&bal={perp:.2f}")
+                )
+            ]]),
+        )
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
@@ -1405,6 +1496,75 @@ async def cmd_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"\nGross PnL: {sign}${total_pnl:.2f}")
         lines.append(f"Fees paid: -${total_fees:.2f}")
         lines.append(f"Net PnL:   {'+'if net>=0 else ''}${net:.2f}")
+        await update.message.reply_text("\n".join(lines))
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    try:
+        client = _get_client(update.effective_user.id)
+        fills  = client.get_fills(days=30)
+        if not fills:
+            await update.message.reply_text("No trades in the last 30 days.")
+            return
+
+        # Group closes by coin-side pair to identify trade P&L
+        close_pnls: list[float] = []
+        total_pnl = total_fees = 0.0
+        daily_pnl: dict[str, float] = {}
+        coin_pnl:  dict[str, float] = {}
+        for f in fills:
+            pnl  = float(f.get("closedPnl", 0))
+            fee  = float(f.get("fee", 0))
+            coin = f.get("coin", "?")
+            ts   = float(f.get("time", 0)) / 1000
+            day  = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+            total_pnl  += pnl
+            total_fees += fee
+            if pnl != 0:
+                close_pnls.append(pnl)
+            daily_pnl[day] = daily_pnl.get(day, 0.0) + pnl
+            coin_pnl[coin]  = coin_pnl.get(coin, 0.0) + pnl
+
+        wins   = [p for p in close_pnls if p > 0]
+        losses = [p for p in close_pnls if p < 0]
+        n      = len(close_pnls)
+        win_rt = len(wins) / n * 100 if n else 0
+        avg_w  = sum(wins) / len(wins) if wins else 0
+        avg_l  = sum(losses) / len(losses) if losses else 0
+        net    = total_pnl - total_fees
+
+        best_day  = max(daily_pnl.items(), key=lambda x: x[1]) if daily_pnl else None
+        worst_day = min(daily_pnl.items(), key=lambda x: x[1]) if daily_pnl else None
+        best_coin = max(coin_pnl.items(),  key=lambda x: x[1]) if coin_pnl else None
+        worst_coin= min(coin_pnl.items(),  key=lambda x: x[1]) if coin_pnl else None
+
+        sign   = "+" if total_pnl >= 0 else ""
+        emoji  = "🟢" if net >= 0 else "🔴"
+        lines = [f"📊 30-Day Trading Stats\n"]
+        lines.append(f"{emoji} Net PnL:    {sign}${net:,.2f}  (after fees)")
+        lines.append(f"   Gross:    {'+'if total_pnl>=0 else ''}${total_pnl:,.2f}")
+        lines.append(f"   Fees:     -${total_fees:,.2f}")
+        lines.append(f"\n📈 Win Rate:  {win_rt:.0f}%  ({len(wins)}W / {len(losses)}L / {n} total)")
+        if avg_w: lines.append(f"   Avg win:  +${avg_w:,.2f}")
+        if avg_l: lines.append(f"   Avg loss: -${abs(avg_l):,.2f}")
+        if avg_w and avg_l:
+            rr = avg_w / abs(avg_l)
+            lines.append(f"   R:R ratio: {rr:.2f}")
+
+        if best_day:
+            bsign = "+" if best_day[1] >= 0 else ""
+            lines.append(f"\n🏆 Best day:  {best_day[0]} ({bsign}${best_day[1]:,.2f})")
+        if worst_day and worst_day[0] != (best_day[0] if best_day else ""):
+            lines.append(f"💀 Worst day: {worst_day[0]} (-${abs(worst_day[1]):,.2f})")
+        if best_coin:
+            lines.append(f"\n🥇 Best coin:  {best_coin[0]}  +${best_coin[1]:,.2f}")
+        if worst_coin and worst_coin[0] != (best_coin[0] if best_coin else ""):
+            lines.append(f"💣 Worst coin: {worst_coin[0]}  -${abs(worst_coin[1]):,.2f}")
+
         await update.message.reply_text("\n".join(lines))
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
@@ -1991,36 +2151,46 @@ async def _poll_notifications(context: ContextTypes.DEFAULT_TYPE):
                         ),
                     )
 
-            # Order fill detection
-            orders = client.get_open_orders()
-            current_oids = {o["oid"] for o in orders}
+            # Fill notifications via get_fills() with timestamp tracking
+            last_ts = _last_fill_ts.get(tg_id, 0)
+            new_last = last_ts
+            try:
+                fills = client.get_fills(days=1)
+                for f in sorted(fills, key=lambda x: float(x.get("time", 0))):
+                    fill_ts = float(f.get("time", 0))
+                    if fill_ts <= last_ts:
+                        continue
+                    new_last = max(new_last, fill_ts)
+                    coin        = f.get("coin", "?")
+                    fill_px     = float(f.get("px", 0))
+                    fill_sz     = float(f.get("sz", 0))
+                    is_buy      = f.get("side") == "B"
+                    closed_pnl  = float(f.get("closedPnl", 0))
+                    order_type  = f.get("orderType", "")
 
-            if tg_id in _snapshots:
-                snap = _snapshots[tg_id]
-                disappeared = snap["order_ids"] - current_oids
-                for oid in disappeared:
-                    order = snap["orders"].get(oid, {})
-                    coin = order.get("coin", "")
-                    old_sz = snap["positions"].get(coin, 0)
-                    new_sz = current_positions.get(coin, 0)
-                    if abs(old_sz - new_sz) < 0.0001:
-                        continue  # position didn't change — likely manual cancel
-                    order_type = order.get("orderType", "Order")
-                    px = float(order.get("limitPx", 0))
                     if "Take Profit" in order_type:
-                        msg = f"✅ Take-Profit filled!\n\n{coin} closed at ${px:,.2f}"
+                        pnl_str = f"+${closed_pnl:,.2f}" if closed_pnl >= 0 else f"-${abs(closed_pnl):,.2f}"
+                        msg = f"🎯 Take-Profit filled!\n\n{coin} @ ${fill_px:,.2f}\nPnL: {pnl_str}"
                     elif "Stop" in order_type:
-                        msg = f"🛑 Stop-Loss filled!\n\n{coin} closed at ${px:,.2f}"
+                        pnl_str = f"+${closed_pnl:,.2f}" if closed_pnl >= 0 else f"-${abs(closed_pnl):,.2f}"
+                        msg = f"🛑 Stop-Loss filled!\n\n{coin} @ ${fill_px:,.2f}\nPnL: {pnl_str}"
+                    elif closed_pnl != 0:
+                        pnl_str = f"+${closed_pnl:,.2f}" if closed_pnl >= 0 else f"-${abs(closed_pnl):,.2f}"
+                        side_lbl = "BUY" if is_buy else "SELL"
+                        msg = f"✅ Fill: {coin} {side_lbl} {fill_sz} @ ${fill_px:,.2f}\nPnL: {pnl_str}"
                     else:
-                        side = "BUY" if order.get("side") == "B" else "SELL"
-                        msg = f"✅ Order filled!\n\n{coin} {side} at ${px:,.2f}"
+                        side_lbl = "BUY" if is_buy else "SELL"
+                        msg = f"✅ Fill: {coin} {side_lbl} {fill_sz} @ ${fill_px:,.2f}"
+
                     await context.bot.send_message(chat_id=tg_id, text=msg)
 
-            _snapshots[tg_id] = {
-                "order_ids": current_oids,
-                "orders": {o["oid"]: o for o in orders},
-                "positions": current_positions,
-            }
+                if new_last > last_ts:
+                    _last_fill_ts[tg_id] = new_last
+                elif tg_id not in _last_fill_ts:
+                    # First run — seed with now so we don't replay history
+                    _last_fill_ts[tg_id] = time.time() * 1000
+            except Exception:
+                pass  # fills are best-effort, don't break the poll loop
 
             # Reset error counter on success
             _poll_errors.pop(tg_id, None)
@@ -2054,7 +2224,8 @@ async def _post_init(app: Application):
     await app.bot.set_my_commands([
         # ── top-level actions ────────────────────────────
         BotCommand("overview",    "BTC & ETH charts, prices, funding rates"),
-        BotCommand("positions",   "Open positions & balance"),
+        BotCommand("book",        "Positions + orders + balance (full book)"),
+        BotCommand("positions",   "Alias for /book"),
         BotCommand("open",        "Open a position"),
         BotCommand("close",       "Close a position"),
         BotCommand("ladder",      "Scaled close — /ladder ETH 5 3500 3000"),
@@ -2068,6 +2239,7 @@ async def _post_init(app: Application):
         BotCommand("dismiss",     "Discard previewed order"),
         # ── account & analytics ──────────────────────────
         BotCommand("pnl",         "7-day realised PnL"),
+        BotCommand("stats",       "30-day win rate, R:R, best/worst"),
         BotCommand("digest",      "Today's PnL digest on demand"),
         BotCommand("risk",        "Margin & liquidation risk"),
         # ── market data ──────────────────────────────────
@@ -2096,6 +2268,7 @@ def main():
         ("register",    cmd_register),
         ("confirm",     cmd_confirm),
         ("dismiss",     cmd_dismiss),
+        ("book",        cmd_book),
         ("positions",   cmd_positions),
         ("open",        cmd_open),
         ("close",       cmd_close),
@@ -2110,6 +2283,7 @@ def main():
         ("price",       cmd_price),
         ("assets",      cmd_assets),
         ("pnl",         cmd_pnl),
+        ("stats",       cmd_stats),
         ("risk",        cmd_risk),
         ("alert",       cmd_alert),
         ("alerts",      cmd_alerts),
@@ -2126,7 +2300,7 @@ def main():
     app.job_queue.run_repeating(_persist_price_history, interval=300, first=300)  # every 5 min
     app.job_queue.run_daily(_daily_digest, time=DIGEST_TIME)
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
-    app.add_handler(CallbackQueryHandler(handle_close_callback, pattern="^(close_|set_tp:|set_sl:)"))
+    app.add_handler(CallbackQueryHandler(handle_close_callback, pattern="^(close_pct:|close_partial:|set_tp:|set_sl:)"))
     app.add_handler(CallbackQueryHandler(handle_chart_callback, pattern="^chart_tf:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     # Must be last — catches any /command not matched above

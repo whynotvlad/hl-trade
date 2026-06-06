@@ -227,6 +227,36 @@ test("ladder mode mentions orders", () => {
   assert.ok(s.includes("orders") || s.includes("5"));
 });
 
+// ── % sizing (mirrors applyPct in open.html) ──────────────────────────────────
+console.log("\n% sizing");
+
+function applyPct(balance, pct, leverage, price) {
+  // margin = balance * pct%, notional = margin * lev, size = notional / price
+  if (price <= 0) throw new Error("price must be positive");
+  var margin   = balance * pct / 100;
+  var notional = margin * leverage;
+  return notional / price;
+}
+
+test("1% of $10k, 5x, BTC $50k → 0.01 BTC", () => {
+  assert.ok(Math.abs(applyPct(10000, 1, 5, 50000) - 0.01) < 1e-8);
+});
+test("5% of $5k, 10x, ETH $2500 → 1.0 ETH", () => {
+  assert.ok(Math.abs(applyPct(5000, 5, 10, 2500) - 1.0) < 1e-8);
+});
+test("higher leverage → larger size", () => {
+  assert.ok(applyPct(1000, 1, 10, 100) > applyPct(1000, 1, 5, 100));
+});
+test("higher pct → proportionally larger size", () => {
+  assert.ok(Math.abs(applyPct(1000, 5, 5, 100) / applyPct(1000, 1, 5, 100) - 5) < 1e-8);
+});
+test("higher price → smaller size", () => {
+  assert.ok(applyPct(1000, 1, 5, 200) < applyPct(1000, 1, 5, 100));
+});
+test("zero price throws", () => {
+  assert.throws(() => applyPct(1000, 1, 5, 0), /positive/);
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log("\n" + "─".repeat(50));
 console.log("Results: " + passed + " passed, " + failed + " failed");

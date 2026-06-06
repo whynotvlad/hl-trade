@@ -412,6 +412,11 @@ function showConfirm(msg, onOk) {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
+(function readUrlParams() {
+  var params = new URLSearchParams(window.location.search);
+  var c = params.get("coin");
+  if (c) { document.getElementById("coin").value = c.toUpperCase(); fetchPrice(c.toUpperCase()); }
+})();
 updChipColor();
 loadState();
 upd();

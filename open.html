@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <title>Open Trade <!-- v9 --></title>
+  <title>Open Trade <!-- v10 --></title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="lib/webapp_logic.js"></script>
   <style>
@@ -162,8 +162,26 @@
 </div>
 
 <div class="section">
-  <div class="lbl">Size (base coin)</div>
-  <input type="number" id="size" placeholder="e.g. 0.001" step="any" min="0" oninput="upd()" />
+  <div class="lbl" style="display:flex;justify-content:space-between;align-items:center">
+    <span>Size (base coin)</span>
+    <span id="pct-toggle-wrap" style="display:none">
+      <button id="pct-toggle" onclick="togglePctMode()" style="
+        font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;
+        border:1.5px solid var(--border);background:var(--card);color:var(--hint);cursor:pointer;">
+        % of account
+      </button>
+    </span>
+  </div>
+  <input type="number" id="size" placeholder="e.g. 0.001" step="any" min="0" oninput="onSizeInput()" autocomplete="off" />
+  <div id="pct-row" style="display:none;margin-top:8px">
+    <div style="font-size:12px;color:var(--hint);margin-bottom:6px" id="bal-label"></div>
+    <div class="chips" id="pct-chips">
+      <div class="chip" id="pct1"  onclick="applyPct(1)">1%</div>
+      <div class="chip" id="pct2"  onclick="applyPct(2)">2%</div>
+      <div class="chip" id="pct5"  onclick="applyPct(5)">5%</div>
+      <div class="chip" id="pct10" onclick="applyPct(10)">10%</div>
+    </div>
+  </div>
 </div>
 
 <div class="section">
@@ -284,8 +302,69 @@ var side  = "long";
 var lev   = 5;
 var otype = "market";
 var parts = 3;
-var livePx = 0; // fetched live price
+var livePx  = 0; // fetched live price
 var priceTimer = null;
+var acctBal = 0; // account balance passed via ?bal= URL param
+var pctMode = false;
+
+// Read ?bal from URL (set by bot when sending the WebApp button)
+(function readUrlParams() {
+  var params = new URLSearchParams(window.location.search);
+  var b = parseFloat(params.get("bal"));
+  if (b > 0) {
+    acctBal = b;
+    document.getElementById("pct-toggle-wrap").style.display = "";
+    document.getElementById("bal-label").textContent = "Account: $" + b.toLocaleString("en-US", {maximumFractionDigits: 2});
+  }
+  // Pre-fill coin if ?coin= passed (e.g. from positions view)
+  var c = params.get("coin");
+  if (c) { document.getElementById("coin").value = c.toUpperCase(); fetchPrice(c.toUpperCase()); }
+})();
+
+// ── % Sizing ──────────────────────────────────────────────────────────────────
+function togglePctMode() {
+  pctMode = !pctMode;
+  var btn = document.getElementById("pct-toggle");
+  var row = document.getElementById("pct-row");
+  if (pctMode) {
+    btn.style.borderColor = "#2563eb"; btn.style.color = "#60a5fa";
+    row.style.display = "";
+  } else {
+    btn.style.borderColor = ""; btn.style.color = "";
+    row.style.display = "none";
+  }
+  hap.tap();
+  upd();
+}
+
+function applyPct(pct) {
+  hap.tap();
+  // size in base coin = (pct% of account) / price / leverage (margin-based)
+  var px = livePx;
+  if (!px && otype === "limit") px = parseFloat(document.getElementById("lmt-px").value) || 0;
+  if (!px || acctBal <= 0) { showAlert("Live price needed to calculate size. Type the coin first."); return; }
+  var marginToUse = acctBal * pct / 100;
+  var notional    = marginToUse * lev;
+  var sz          = notional / px;
+  // round to reasonable precision
+  var decimals    = px >= 1000 ? 4 : (px >= 1 ? 4 : 6);
+  sz = parseFloat(sz.toFixed(decimals));
+  document.getElementById("size").value = sz;
+  var ids = ["pct1","pct2","pct5","pct10"], vals = [1,2,5,10];
+  var cls = mode === "ladder" ? " on-purple" : " on";
+  for (var i = 0; i < ids.length; i++)
+    document.getElementById(ids[i]).className = "chip" + (vals[i] === pct ? cls : "");
+  upd();
+}
+
+function onSizeInput() {
+  // clear pct chip selection if user types manually
+  ["pct1","pct2","pct5","pct10"].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.className = "chip";
+  });
+  upd();
+}
 
 // ── Mode / Side / Controls ────────────────────────────────────────────────────
 function setMode(m) {

@@ -923,5 +923,315 @@ class TestLadderOpenLeverage(unittest.TestCase):
         c.exchange.update_leverage.assert_called_once()
 
 
+# ─── fill notification logic (new timestamp-based approach) ───────────────────
+
+class TestFillNotifications(unittest.TestCase):
+    """Unit tests for the new get_fills()-based fill notification logic."""
+
+    def _run_fill_check(self, fills, last_ts):
+        """Simulate the fill notification logic, returns (messages, new_last_ts)."""
+        msgs = []
+        new_last = last_ts
+        for f in sorted(fills, key=lambda x: float(x.get("time", 0))):
+            fill_ts = float(f.get("time", 0))
+            if fill_ts <= last_ts:
+                continue
+            new_last = max(new_last, fill_ts)
+            coin = f.get("coin", "?")
+            fill_px = float(f.get("px", 0))
+            fill_sz = float(f.get("sz", 0))
+            is_buy = f.get("side") == "B"
+            closed_pnl = float(f.get("closedPnl", 0))
+            order_type = f.get("orderType", "")
+
+            if "Take Profit" in order_type:
+                msgs.append(("TP", coin, fill_px, closed_pnl))
+            elif "Stop" in order_type:
+                msgs.append(("SL", coin, fill_px, closed_pnl))
+            elif closed_pnl != 0:
+                side_lbl = "BUY" if is_buy else "SELL"
+                msgs.append(("CLOSE", coin, side_lbl, fill_px, closed_pnl))
+            else:
+                side_lbl = "BUY" if is_buy else "SELL"
+                msgs.append(("OPEN", coin, side_lbl, fill_px))
+        return msgs, new_last
+
+    def test_tp_fill_sends_notification(self):
+        fills = [{"time": 1000, "coin": "BTC", "px": "65000", "sz": "0.001",
+                  "side": "A", "closedPnl": "50.0", "orderType": "Take Profit Market"}]
+        msgs, _ = self._run_fill_check(fills, last_ts=0)
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(msgs[0][0], "TP")
+        self.assertEqual(msgs[0][1], "BTC")
+        self.assertAlmostEqual(msgs[0][3], 50.0)
+
+    def test_sl_fill_sends_notification(self):
+        fills = [{"time": 2000, "coin": "ETH", "px": "3000", "sz": "1.0",
+                  "side": "B", "closedPnl": "-25.0", "orderType": "Stop Market"}]
+        msgs, _ = self._run_fill_check(fills, last_ts=0)
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(msgs[0][0], "SL")
+        self.assertAlmostEqual(msgs[0][3], -25.0)
+
+    def test_already_seen_fill_ignored(self):
+        fills = [{"time": 500, "coin": "BTC", "px": "60000", "sz": "0.001",
+                  "side": "B", "closedPnl": "0", "orderType": "Limit Order"}]
+        msgs, _ = self._run_fill_check(fills, last_ts=500)
+        self.assertEqual(msgs, [])
+
+    def test_only_new_fills_sent(self):
+        fills = [
+            {"time": 100, "coin": "BTC", "px": "60000", "sz": "0.001",
+             "side": "B", "closedPnl": "0", "orderType": "Limit Order"},
+            {"time": 200, "coin": "ETH", "px": "3000", "sz": "1.0",
+             "side": "B", "closedPnl": "0", "orderType": "Limit Order"},
+        ]
+        msgs, new_last = self._run_fill_check(fills, last_ts=100)
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(msgs[0][1], "ETH")
+        self.assertEqual(new_last, 200)
+
+    def test_last_ts_updated_to_newest_fill(self):
+        fills = [
+            {"time": 300, "coin": "SOL", "px": "150", "sz": "10",
+             "side": "B", "closedPnl": "0", "orderType": "Limit Order"},
+            {"time": 500, "coin": "SOL", "px": "155", "sz": "5",
+             "side": "A", "closedPnl": "50", "orderType": "Limit Order"},
+        ]
+        _, new_last = self._run_fill_check(fills, last_ts=0)
+        self.assertEqual(new_last, 500)
+
+    def test_closing_fill_shows_pnl(self):
+        fills = [{"time": 100, "coin": "SOL", "px": "155", "sz": "10",
+                  "side": "A", "closedPnl": "42.5", "orderType": "Limit Order"}]
+        msgs, _ = self._run_fill_check(fills, last_ts=0)
+        self.assertEqual(msgs[0][0], "CLOSE")
+        self.assertAlmostEqual(msgs[0][4], 42.5)
+
+    def test_opening_fill_no_pnl(self):
+        fills = [{"time": 100, "coin": "BTC", "px": "65000", "sz": "0.001",
+                  "side": "B", "closedPnl": "0", "orderType": "Limit Order"}]
+        msgs, _ = self._run_fill_check(fills, last_ts=0)
+        self.assertEqual(msgs[0][0], "OPEN")
+
+    def test_multiple_fills_all_notified(self):
+        fills = [
+            {"time": 100 + i, "coin": "ETH", "px": str(3000 + i), "sz": "1",
+             "side": "B", "closedPnl": "0", "orderType": "Limit Order"}
+            for i in range(5)
+        ]
+        msgs, _ = self._run_fill_check(fills, last_ts=0)
+        self.assertEqual(len(msgs), 5)
+
+    def test_fills_processed_in_time_order(self):
+        fills = [
+            {"time": 200, "coin": "ETH", "px": "3100", "sz": "1",
+             "side": "A", "closedPnl": "100", "orderType": "Limit Order"},
+            {"time": 100, "coin": "ETH", "px": "3000", "sz": "1",
+             "side": "B", "closedPnl": "0", "orderType": "Limit Order"},
+        ]
+        msgs, _ = self._run_fill_check(fills, last_ts=0)
+        self.assertEqual(msgs[0][0], "OPEN")   # time=100 processed first
+        self.assertEqual(msgs[1][0], "CLOSE")  # time=200 second
+
+
+# ─── close_pct inline button logic ────────────────────────────────────────────
+
+class TestClosePctLogic(unittest.TestCase):
+    """Unit tests for the close_pct button calculations."""
+
+    def _calc_close_size(self, pos_size, pct):
+        return round(abs(pos_size) * pct / 100, 8)
+
+    def _calc_pnl(self, pos_size, entry_px, current_px, close_size):
+        is_long = pos_size > 0
+        return (current_px - entry_px) * close_size * (1 if is_long else -1)
+
+    def test_close_100_uses_full_size(self):
+        self.assertAlmostEqual(self._calc_close_size(1.0, 100), 1.0)
+
+    def test_close_50_halves_position(self):
+        self.assertAlmostEqual(self._calc_close_size(2.0, 50), 1.0)
+
+    def test_close_25_quarters_position(self):
+        self.assertAlmostEqual(self._calc_close_size(4.0, 25), 1.0)
+
+    def test_close_pct_short_position(self):
+        self.assertAlmostEqual(self._calc_close_size(-1.5, 50), 0.75)
+
+    def test_pnl_long_profit(self):
+        pnl = self._calc_pnl(1.0, 3000, 3500, 1.0)
+        self.assertAlmostEqual(pnl, 500.0)
+
+    def test_pnl_long_loss(self):
+        pnl = self._calc_pnl(1.0, 3000, 2500, 1.0)
+        self.assertAlmostEqual(pnl, -500.0)
+
+    def test_pnl_short_profit(self):
+        pnl = self._calc_pnl(-1.0, 3000, 2500, 1.0)
+        self.assertAlmostEqual(pnl, 500.0)
+
+    def test_pnl_short_loss(self):
+        pnl = self._calc_pnl(-1.0, 3000, 3500, 1.0)
+        self.assertAlmostEqual(pnl, -500.0)
+
+    def test_partial_close_pnl_scales_with_size(self):
+        pnl_full = self._calc_pnl(1.0, 3000, 3500, 1.0)
+        pnl_half = self._calc_pnl(1.0, 3000, 3500, 0.5)
+        self.assertAlmostEqual(pnl_half, pnl_full / 2)
+
+    def test_close_size_rounded_to_8_decimals(self):
+        # round() to 8 places should not exceed 8 decimal places for normal sizes
+        sz = self._calc_close_size(1.123456789, 50)
+        self.assertAlmostEqual(sz, round(0.561728394, 8), places=8)
+
+
+# ─── stats / PnL analytics logic ──────────────────────────────────────────────
+
+class TestStatsLogic(unittest.TestCase):
+    """Unit tests for the /stats command analytics calculations."""
+
+    def _compute_stats(self, fills):
+        close_pnls, total_pnl, total_fees = [], 0.0, 0.0
+        daily: dict = {}
+        coin_pnl: dict = {}
+        for f in fills:
+            pnl  = float(f.get("closedPnl", 0))
+            fee  = float(f.get("fee", 0))
+            coin = f.get("coin", "?")
+            ts   = float(f.get("time", 0)) / 1000
+            import datetime as _dt
+            day = _dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+            total_pnl  += pnl
+            total_fees += fee
+            if pnl != 0:
+                close_pnls.append(pnl)
+            daily[day]    = daily.get(day, 0.0) + pnl
+            coin_pnl[coin] = coin_pnl.get(coin, 0.0) + pnl
+        wins   = [p for p in close_pnls if p > 0]
+        losses = [p for p in close_pnls if p < 0]
+        n      = len(close_pnls)
+        win_rt = len(wins) / n * 100 if n else 0
+        avg_w  = sum(wins) / len(wins) if wins else 0
+        avg_l  = sum(losses) / len(losses) if losses else 0
+        return {
+            "total_pnl": total_pnl, "total_fees": total_fees,
+            "net": total_pnl - total_fees,
+            "win_rate": win_rt, "n": n, "wins": len(wins), "losses": len(losses),
+            "avg_w": avg_w, "avg_l": avg_l,
+            "daily": daily, "coin_pnl": coin_pnl,
+        }
+
+    def _make_fill(self, pnl, fee=0, coin="ETH", ts=1000000):
+        return {"closedPnl": str(pnl), "fee": str(fee), "coin": coin, "time": str(ts)}
+
+    def test_all_winners_100_pct_win_rate(self):
+        fills = [self._make_fill(10, ts=i*1000) for i in range(1, 6)]
+        stats = self._compute_stats(fills)
+        self.assertAlmostEqual(stats["win_rate"], 100.0)
+
+    def test_all_losers_0_pct_win_rate(self):
+        fills = [self._make_fill(-10, ts=i*1000) for i in range(1, 6)]
+        stats = self._compute_stats(fills)
+        self.assertAlmostEqual(stats["win_rate"], 0.0)
+
+    def test_mixed_win_rate(self):
+        fills = [self._make_fill(10, ts=1000), self._make_fill(-5, ts=2000),
+                 self._make_fill(8, ts=3000), self._make_fill(-3, ts=4000)]
+        stats = self._compute_stats(fills)
+        self.assertAlmostEqual(stats["win_rate"], 50.0)
+
+    def test_fees_deducted_from_net(self):
+        fills = [self._make_fill(100, fee=5, ts=1000)]
+        stats = self._compute_stats(fills)
+        self.assertAlmostEqual(stats["net"], 95.0)
+        self.assertAlmostEqual(stats["total_fees"], 5.0)
+
+    def test_total_pnl_sums_correctly(self):
+        fills = [self._make_fill(10, ts=1000), self._make_fill(20, ts=2000),
+                 self._make_fill(-5, ts=3000)]
+        stats = self._compute_stats(fills)
+        self.assertAlmostEqual(stats["total_pnl"], 25.0)
+
+    def test_avg_winner(self):
+        fills = [self._make_fill(10, ts=1000), self._make_fill(20, ts=2000)]
+        stats = self._compute_stats(fills)
+        self.assertAlmostEqual(stats["avg_w"], 15.0)
+
+    def test_avg_loser(self):
+        fills = [self._make_fill(-5, ts=1000), self._make_fill(-15, ts=2000)]
+        stats = self._compute_stats(fills)
+        self.assertAlmostEqual(stats["avg_l"], -10.0)
+
+    def test_zero_pnl_fills_excluded_from_close_count(self):
+        fills = [self._make_fill(0, ts=1000), self._make_fill(10, ts=2000)]
+        stats = self._compute_stats(fills)
+        self.assertEqual(stats["n"], 1)
+
+    def test_coin_pnl_aggregated(self):
+        fills = [self._make_fill(10, coin="BTC", ts=1000),
+                 self._make_fill(5, coin="BTC", ts=2000),
+                 self._make_fill(-3, coin="ETH", ts=3000)]
+        stats = self._compute_stats(fills)
+        self.assertAlmostEqual(stats["coin_pnl"]["BTC"], 15.0)
+        self.assertAlmostEqual(stats["coin_pnl"]["ETH"], -3.0)
+
+    def test_daily_pnl_aggregated(self):
+        # Both fills in same day (ts=0 → 1970-01-01)
+        fills = [self._make_fill(10, ts=0), self._make_fill(20, ts=1000)]
+        stats = self._compute_stats(fills)
+        self.assertEqual(len(stats["daily"]), 1)
+        self.assertAlmostEqual(list(stats["daily"].values())[0], 30.0)
+
+    def test_empty_fills_returns_zero_stats(self):
+        stats = self._compute_stats([])
+        self.assertEqual(stats["n"], 0)
+        self.assertAlmostEqual(stats["win_rate"], 0.0)
+        self.assertAlmostEqual(stats["total_pnl"], 0.0)
+
+
+# ─── % sizing logic ───────────────────────────────────────────────────────────
+
+class TestPctSizingLogic(unittest.TestCase):
+    """Unit tests for the % of account sizing calculation (mirrors JS applyPct)."""
+
+    def _calc_size(self, balance, pct, leverage, price, decimals=4):
+        margin   = balance * pct / 100
+        notional = margin * leverage
+        sz       = notional / price
+        return round(sz, decimals)
+
+    def test_1pct_5x_btc(self):
+        # 1% of $10k account, 5x leverage, BTC at $50k
+        # margin = $100, notional = $500, size = 0.01 BTC
+        sz = self._calc_size(10000, 1, 5, 50000)
+        self.assertAlmostEqual(sz, 0.01, places=4)
+
+    def test_5pct_10x_eth(self):
+        # 5% of $5k account, 10x leverage, ETH at $2500
+        # margin = $250, notional = $2500, size = 1.0 ETH
+        sz = self._calc_size(5000, 5, 10, 2500)
+        self.assertAlmostEqual(sz, 1.0, places=4)
+
+    def test_larger_leverage_gives_larger_size(self):
+        sz_5x  = self._calc_size(1000, 1, 5,  100)
+        sz_10x = self._calc_size(1000, 1, 10, 100)
+        self.assertGreater(sz_10x, sz_5x)
+
+    def test_higher_pct_gives_larger_size(self):
+        sz_1pct = self._calc_size(1000, 1, 5, 100)
+        sz_5pct = self._calc_size(1000, 5, 5, 100)
+        self.assertAlmostEqual(sz_5pct, sz_1pct * 5, places=4)
+
+    def test_higher_price_gives_smaller_size(self):
+        sz_low  = self._calc_size(1000, 1, 5, 100)
+        sz_high = self._calc_size(1000, 1, 5, 200)
+        self.assertAlmostEqual(sz_high, sz_low / 2, places=4)
+
+    def test_zero_price_would_divide_by_zero(self):
+        with self.assertRaises(ZeroDivisionError):
+            _ = 1000 * 1 / 100 * 5 / 0
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
