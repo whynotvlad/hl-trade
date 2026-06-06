@@ -120,7 +120,8 @@ def positions_cmd():
         client = get_client()
         state = client.get_positions()
         prices = client.get_prices()
-        display.show_positions(state, prices)
+        spot_usdc = client.get_spot_usdc()
+        display.show_positions(state, prices, spot_usdc)
     except Exception as e:
         handle_error(e)
 

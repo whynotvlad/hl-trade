@@ -58,6 +58,13 @@ class HLClient:
     def get_positions(self) -> dict:
         return self.info.user_state(self.address)
 
+    def get_spot_usdc(self) -> float:
+        state = self.info.spot_user_state(self.address)
+        for balance in state.get("balances", []):
+            if balance["coin"] == "USDC":
+                return float(balance["total"])
+        return 0.0
+
     def get_open_orders(self) -> list:
         return self.info.frontend_open_orders(self.address)
 

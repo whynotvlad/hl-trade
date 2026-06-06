@@ -4,7 +4,7 @@ from rich.table import Table
 console = Console()
 
 
-def show_positions(state: dict, prices: dict):
+def show_positions(state: dict, prices: dict, spot_usdc: float = 0.0):
     positions = [
         e for e in state.get("assetPositions", [])
         if float(e["position"]["szi"]) != 0
@@ -51,8 +51,12 @@ def show_positions(state: dict, prices: dict):
         console.print(table)
 
     summary = state.get("marginSummary", {})
+    perp_value = float(summary.get("accountValue", 0))
+    total = perp_value + spot_usdc
     console.print(
-        f"\n  Account value:     [bold]${float(summary.get('accountValue', 0)):,.2f}[/bold]\n"
+        f"\n  Perp account:      [bold]${perp_value:,.2f}[/bold]\n"
+        f"  Spot USDC:         ${spot_usdc:,.2f}\n"
+        f"  Total:             [bold]${total:,.2f}[/bold]\n"
         f"  Margin used:       ${float(summary.get('totalMarginUsed', 0)):,.2f}\n"
         f"  Withdrawable:      ${float(state.get('withdrawable', 0)):,.2f}"
     )
