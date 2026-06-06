@@ -730,7 +730,13 @@ async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         pos_size = float(pos["szi"])
-        close_size = size if size is not None else abs(pos_size)
+        max_size = abs(pos_size)
+        if size is not None and size > max_size:
+            await update.message.reply_text(
+                f"Size {size} exceeds position size {max_size}.\n\nCheck /positions"
+            )
+            return
+        close_size = size if size is not None else max_size
         is_long = pos_size > 0
         price = client.get_mid_price(coin)
         pnl = (price - float(pos["entryPx"])) * close_size * (1 if is_long else -1)
@@ -876,9 +882,12 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Check active orders with /orders"
                 )
             else:
-                await update.message.reply_text(
-                    f"Cancelled {len(results)} {target.upper()} order(s) for {coin}."
-                )
+                ok = sum(1 for r in results if r.get("status") == "ok")
+                failed = len(results) - ok
+                msg = f"Cancelled {ok} {target.upper()} order(s) for {coin}."
+                if failed:
+                    msg += f"\n{failed} failed — check /orders"
+                await update.message.reply_text(msg)
         else:
             result = client.cancel_by_id(coin=coin, oid=int(target))
             await update.message.reply_text(_fmt_result(result))
@@ -1267,6 +1276,11 @@ async def _poll_notifications(context: ContextTypes.DEFAULT_TYPE):
                         )
                 else:
                     _liq_warned.pop(warn_key, None)
+
+            # Clear liq_warned keys for positions that no longer exist
+            stale = [k for k in list(_liq_warned) if k.startswith(f"{tg_id}_") and k[len(f"{tg_id}_"):] not in current_positions]
+            for k in stale:
+                _liq_warned.pop(k, None)
 
             # Order fill detection
             orders = client.get_open_orders()
