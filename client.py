@@ -17,18 +17,20 @@ def _round_price(px: float) -> float:
 
 
 class HLClient:
-    def __init__(self):
-        config.validate()
+    def __init__(self, private_key: Optional[str] = None, account_address: Optional[str] = None):
         self._base_url = config.get_base_url()
-        self._account = Account.from_key(config.PRIVATE_KEY)
+
+        pk = private_key or config.PRIVATE_KEY
+        if not pk:
+            config.validate()  # will print a helpful message and exit
+        self._account = Account.from_key(pk)
         self.info = Info(self._base_url, skip_ws=True)
 
-        if config.ACCOUNT_ADDRESS:
-            # Agent wallet mode: sign with the agent key, query/trade on the master account
-            self.address = config.ACCOUNT_ADDRESS.lower()
-            self.exchange = Exchange(self._account, self._base_url, account_address=config.ACCOUNT_ADDRESS)
+        acct = account_address or config.ACCOUNT_ADDRESS
+        if acct:
+            self.address = acct.lower()
+            self.exchange = Exchange(self._account, self._base_url, account_address=acct)
         else:
-            # Direct mode: the private key IS the trading account
             self.address = self._account.address.lower()
             self.exchange = Exchange(self._account, self._base_url)
         self._universe: Optional[list] = None
