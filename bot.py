@@ -4,8 +4,8 @@ import time
 from typing import Optional
 
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import BotCommand, ReplyKeyboardMarkup, Update
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 import db
 from client import HLClient
@@ -29,8 +29,14 @@ _snapshots: dict[int, dict] = {}     # tg_id -> {order_ids, orders, positions}
 _liq_warned: dict[str, bool] = {}    # "{tg_id}_{coin}" -> True when warning already sent
 
 CONFIRM_TTL = 60
-POLL_INTERVAL = 30  # seconds between notification checks
-LIQ_WARN_PCT = 15   # warn when < 15% from liquidation price
+POLL_INTERVAL = 30
+LIQ_WARN_PCT = 15
+
+QUICK_KEYS = ReplyKeyboardMarkup(
+    [["/positions", "/orders"], ["/pnl", "/price BTC"]],
+    resize_keyboard=True,
+    is_persistent=True,
+)
 
 # ── help texts ────────────────────────────────────────────────────────────────
 
@@ -269,7 +275,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/price BTC — current price\n"
             "/pnl — 7-day realised PnL\n"
             "/risk — margin & liquidation risk\n\n"
-            "Need help? /help or /help <command>"
+            "Need help? /help or /help <command>",
+            reply_markup=QUICK_KEYS,
         )
     else:
         await update.message.reply_text(
@@ -357,7 +364,8 @@ async def cmd_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Registered!\n\n"
             "⚠️ Delete your /register message now — it contains your private key.\n\n"
-            "Try /positions to verify the connection."
+            "Try /positions to verify the connection.",
+            reply_markup=QUICK_KEYS,
         )
     except Exception as e:
         await update.message.reply_text(f"Registration failed: {e}")
@@ -885,6 +893,15 @@ async def cmd_listusers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── background notification polling ──────────────────────────────────────────
 
+async def cmd_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update.effective_user.id):
+        return
+    await update.message.reply_text(
+        f"Unknown command: {update.message.text.split()[0]}\n\n"
+        "Send /help to see all available commands."
+    )
+
+
 async def _poll_notifications(context: ContextTypes.DEFAULT_TYPE):
     users = db.get_all_registered_users()
     all_alerts = db.get_all_alerts()
@@ -996,12 +1013,34 @@ async def _poll_notifications(context: ContextTypes.DEFAULT_TYPE):
 
 # ── entry point ───────────────────────────────────────────────────────────────
 
+async def _post_init(app: Application):
+    await app.bot.set_my_commands([
+        BotCommand("positions",   "Open positions & balance"),
+        BotCommand("orders",      "Resting orders"),
+        BotCommand("pnl",         "7-day realised PnL"),
+        BotCommand("risk",        "Margin & liquidation risk"),
+        BotCommand("price",       "Current price — /price BTC"),
+        BotCommand("alert",       "Set price alert — /alert BTC 70000"),
+        BotCommand("alerts",      "List active alerts"),
+        BotCommand("open",        "Open a position"),
+        BotCommand("close",       "Close a position"),
+        BotCommand("tp",          "Set take-profit"),
+        BotCommand("sl",          "Set stop-loss"),
+        BotCommand("cancel",      "Cancel an order"),
+        BotCommand("confirm",     "Execute previewed order"),
+        BotCommand("dismiss",     "Discard previewed order"),
+        BotCommand("assets",      "List tradeable markets"),
+        BotCommand("help",        "Command help"),
+        BotCommand("register",    "Link your Hyperliquid account"),
+    ])
+
+
 def main():
     if not TOKEN:
         raise RuntimeError("TELEGRAM_TOKEN not set in .env")
     db.init_db()
 
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).post_init(_post_init).build()
 
     for cmd, handler in [
         ("start",       cmd_start),
@@ -1030,6 +1069,8 @@ def main():
         app.add_handler(CommandHandler(cmd, handler))
 
     app.job_queue.run_repeating(_poll_notifications, interval=POLL_INTERVAL, first=15)
+    # Must be last — catches any /command not matched above
+    app.add_handler(MessageHandler(filters.COMMAND, cmd_unknown))
 
     logging.info("Bot started. Polling…")
     app.run_polling()
