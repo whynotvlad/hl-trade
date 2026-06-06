@@ -242,7 +242,7 @@
 
   <div class="error" id="error"></div>
 
-  <button onclick="submit()" style="
+  <button id="submit-btn" style="
     width:100%; padding:15px; margin-top:8px;
     background:var(--accent); color:var(--accent-t);
     border:none; border-radius:var(--radius);
@@ -250,9 +250,13 @@
   ">Preview Order</button>
 
   <script>
-    const tg = window.Telegram.WebApp;
-    tg.ready();
-    tg.expand();
+    // Defensive SDK init — if it fails, page still works
+    let tg = null;
+    try {
+      tg = window.Telegram.WebApp;
+      tg.ready();
+      tg.expand();
+    } catch(e) { /* not in Telegram or SDK not loaded */ }
 
     let side = 'long';
     let leverage = 5;
@@ -289,7 +293,7 @@
     }
 
     function toggleTpSl() {
-      const body = document.getElementById('tpsl-body');
+      const body   = document.getElementById('tpsl-body');
       const toggle = document.getElementById('tpsl-toggle');
       const hidden = body.classList.toggle('hidden');
       toggle.classList.toggle('open', !hidden);
@@ -300,21 +304,18 @@
       const size = parseFloat(document.getElementById('size').value) || 0;
       document.getElementById('size-unit').textContent = coin === '—' ? '' : coin;
       const el = document.getElementById('summary');
-      if (!coin || coin === '—' || size === 0) {
-        el.innerHTML = 'Fill in the fields above.';
-        return;
-      }
+      if (!coin || coin === '—' || size === 0) { el.innerHTML = 'Fill in the fields above.'; return; }
       const dir = side === 'long' ? '🟢 Long' : '🔴 Short';
       const lp  = parseFloat(document.getElementById('limit-price').value);
       const priceLabel = orderType === 'limit' && lp ? ` @ $${lp.toLocaleString()}` : ' @ market';
       el.innerHTML = `<b>${dir} ${size} ${coin}</b>${priceLabel} <b>${leverage}x</b>`;
     }
 
-    function err(msg) {
-      try { tg.showAlert(msg); } catch(_) { alert(msg); }
+    function showMsg(msg) {
+      if (tg && tg.showAlert) { tg.showAlert(msg); } else { alert(msg); }
     }
 
-    function submit() {
+    function placeOrder() {
       try {
         const coin = document.getElementById('coin').value.trim().toUpperCase();
         const size = parseFloat(document.getElementById('size').value);
@@ -322,14 +323,14 @@
         const tp   = parseFloat(document.getElementById('tp').value) || null;
         const sl   = parseFloat(document.getElementById('sl').value) || null;
 
-        if (!coin)              { err('Enter a coin, e.g. BTC'); return; }
-        if (!size || size <= 0) { err('Enter a size, e.g. 0.001'); return; }
-        if (leverage < 1 || leverage > 50) { err('Leverage must be 1–50'); return; }
-        if (orderType === 'limit' && !lp)  { err('Enter a limit price'); return; }
-        if (tp && sl && side === 'long'  && tp <= sl) { err('Long: TP must be above SL'); return; }
-        if (tp && sl && side === 'short' && tp >= sl) { err('Short: TP must be below SL'); return; }
+        if (!coin)              { showMsg('Enter a coin, e.g. BTC'); return; }
+        if (!size || size <= 0) { showMsg('Enter a size, e.g. 0.001'); return; }
+        if (leverage < 1 || leverage > 50) { showMsg('Leverage must be 1–50'); return; }
+        if (orderType === 'limit' && !lp)  { showMsg('Enter a limit price'); return; }
+        if (tp && sl && side === 'long'  && tp <= sl) { showMsg('Long: TP must be above SL'); return; }
+        if (tp && sl && side === 'short' && tp >= sl) { showMsg('Short: TP must be below SL'); return; }
 
-        tg.sendData(JSON.stringify({
+        const payload = JSON.stringify({
           coin, side,
           size:        String(size),
           leverage:    String(leverage),
@@ -337,15 +338,26 @@
           limit_price: lp ? String(lp) : '',
           tp:          tp ? String(tp) : '',
           sl:          sl ? String(sl) : '',
-        }));
+        });
+
+        if (tg && tg.sendData) {
+          tg.sendData(payload);
+        } else {
+          showMsg('Not running inside Telegram. Data: ' + payload);
+        }
       } catch(e) {
         alert('Error: ' + e.message);
       }
     }
 
-    tg.MainButton.setText('Preview Order');
-    tg.MainButton.show();
-    tg.MainButton.onClick(submit);
+    document.getElementById('submit-btn').addEventListener('click', placeOrder);
+
+    // Telegram MainButton (hidden — only one button visible)
+    try {
+      if (tg && tg.MainButton) {
+        tg.MainButton.hide();
+      }
+    } catch(_) {}
 
     updateSummary();
   </script>
