@@ -1613,6 +1613,27 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"Error processing form: {e}")
 
 
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id):
+        await update.message.reply_text("Admin only.")
+        return
+    text = " ".join(context.args).strip()
+    if not text:
+        await update.message.reply_text("Usage: /broadcast <message>")
+        return
+
+    users = db.get_all_registered_users()
+    all_ids = {u["tg_id"] for u in users} | ADMIN_IDS
+    sent = failed = 0
+    for tg_id in all_ids:
+        try:
+            await context.bot.send_message(chat_id=tg_id, text=text, parse_mode="HTML")
+            sent += 1
+        except Exception:
+            failed += 1
+    await update.message.reply_text(f"Broadcast done: {sent} sent, {failed} failed.")
+
+
 async def cmd_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_allowed(update.effective_user.id):
         return
@@ -1796,6 +1817,7 @@ def main():
         ("adduser",     cmd_adduser),
         ("removeuser",  cmd_removeuser),
         ("listusers",   cmd_listusers),
+        ("broadcast",   cmd_broadcast),
     ]:
         app.add_handler(CommandHandler(cmd, handler))
 
