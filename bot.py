@@ -36,7 +36,11 @@ LIQ_WARN_PCT = 15
 WEB_APP_URL = "https://whynotvlad.github.io/hl-trade/open.html?v=6"
 
 QUICK_KEYS = ReplyKeyboardMarkup(
-    [["/positions", "/orders"], ["/pnl", "/price BTC"]],
+    [
+        ["/positions", "/orders"],
+        ["/pnl",       "/risk"],
+        ["/chart",     "/price BTC"],
+    ],
     resize_keyboard=True,
     is_persistent=True,
 )
@@ -960,8 +964,20 @@ async def cmd_slladder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {e}\n\n/help slladder")
 
 
-_CHART_INTERVALS = {"5m", "15m", "1h", "4h", "1d"}
-_CHART_HOURS = {"5m": 24, "15m": 24, "1h": 24, "4h": 7*24, "1d": 30*24}
+_CHART_INTERVALS  = {"5m", "15m", "1h", "4h", "1d"}
+_CHART_HOURS      = {"5m": 24, "15m": 24, "1h": 24, "4h": 7*24, "1d": 30*24}
+_CHART_TF_ORDER   = ["5m", "15m", "1h", "4h", "1d"]
+_CHART_COINS      = ["BTC", "ETH", "SOL", "AVAX", "ARB", "DOGE"]
+
+
+def _chart_interval_keyboard(coin: str, current: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            f"{'▸ ' if tf == current else ''}{tf}",
+            callback_data=f"chart_tf:{coin}:{tf}",
+        )
+        for tf in _CHART_TF_ORDER
+    ]])
 
 
 def _build_chart(candles: list, coin: str, interval: str) -> "io.BytesIO":
@@ -1049,39 +1065,71 @@ def _build_chart(candles: list, coin: str, interval: str) -> "io.BytesIO":
     return buf
 
 
+async def _send_chart(bot, chat_id: int, tg_id: int, coin: str, interval: str):
+    client  = _get_client(tg_id)
+    hours   = _CHART_HOURS[interval]
+    candles = client.get_candles(coin, interval, hours=hours)
+    buf     = _build_chart(candles, coin, interval)
+    await bot.send_photo(
+        chat_id=chat_id,
+        photo=buf,
+        reply_markup=_chart_interval_keyboard(coin, interval),
+    )
+
+
 async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
     args = context.args
+
     if not args:
         await update.message.reply_text(
-            "Usage: /chart <coin> [interval]\n\n"
-            "Intervals: 5m  15m  1h  4h  1d\n"
-            "Default:   1h\n\n"
-            "Examples:\n"
-            "  /chart BTC\n"
-            "  /chart ETH 5m\n"
-            "  /chart SOL 4h"
+            "Pick a coin:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(c, callback_data=f"chart_tf:{c}:1h")
+                for c in _CHART_COINS[:3]
+            ], [
+                InlineKeyboardButton(c, callback_data=f"chart_tf:{c}:1h")
+                for c in _CHART_COINS[3:]
+            ]]),
         )
         return
+
     coin     = args[0].upper()
     interval = args[1].lower() if len(args) > 1 else "1h"
     if interval not in _CHART_INTERVALS:
         await update.message.reply_text(
             f"Unknown interval '{interval}'.\n"
-            f"Valid: {', '.join(sorted(_CHART_INTERVALS))}"
+            f"Valid: {', '.join(_CHART_TF_ORDER)}"
         )
         return
-    msg = await update.message.reply_text(f"Fetching {coin} {interval} chart…")
+
+    msg = await update.message.reply_text(f"Loading {coin} {interval}…")
     try:
-        client = _get_client(update.effective_user.id)
-        hours   = _CHART_HOURS[interval]
-        candles = client.get_candles(coin, interval, hours=hours)
-        buf     = _build_chart(candles, coin, interval)
-        await update.message.reply_photo(photo=buf)
+        await _send_chart(
+            context.bot, update.effective_chat.id,
+            update.effective_user.id, coin, interval,
+        )
         await msg.delete()
     except Exception as e:
         await msg.edit_text(f"Error: {e}")
+
+
+async def handle_chart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    tg_id = query.from_user.id
+    if not _is_allowed(tg_id):
+        return
+    _, coin, interval = query.data.split(":")
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+        await _send_chart(
+            context.bot, query.message.chat_id,
+            tg_id, coin, interval,
+        )
+    except Exception as e:
+        await context.bot.send_message(chat_id=tg_id, text=f"Error: {e}")
 
 
 async def cmd_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1706,6 +1754,7 @@ def main():
     app.job_queue.run_repeating(_poll_notifications, interval=POLL_INTERVAL, first=15)
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(CallbackQueryHandler(handle_close_callback, pattern="^(close_|set_tp:|set_sl:)"))
+    app.add_handler(CallbackQueryHandler(handle_chart_callback, pattern="^chart_tf:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     # Must be last — catches any /command not matched above
     app.add_handler(MessageHandler(filters.COMMAND, cmd_unknown))
