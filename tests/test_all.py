@@ -756,5 +756,172 @@ class TestSLLadderClient(unittest.TestCase):
         self.assertIn("limit", ladder_type)
 
 
+class TestLadderOpenLeverage(unittest.TestCase):
+    """
+    Tests for the update_leverage guard in ladder_open and open_position.
+
+    Hyperliquid cancels ALL resting orders for a coin when leverage changes.
+    Guard rule: skip update_leverage if a position OR any open orders exist
+    for that coin, so existing resting orders are never wiped.
+    """
+
+    def _make_client(self, szi, coin="ETH", open_orders=None):
+        import client as cli
+        c = cli.HLClient()
+        c.info = MagicMock()
+        if float(szi) != 0:
+            positions = [{"position": {
+                "coin": coin, "szi": szi, "entryPx": "1500",
+                "unrealizedPnl": "0", "leverage": {"value": 10, "type": "cross"},
+            }}]
+        else:
+            positions = []
+        c.info.user_state.return_value = {"assetPositions": positions, "marginSummary": {}}
+        c.info.frontend_open_orders.return_value = open_orders if open_orders is not None else []
+        c.exchange = MagicMock()
+        c.exchange.order.return_value = {
+            "status": "ok",
+            "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 42}}]}},
+        }
+        return c
+
+    # ── ladder_open: leverage guard ──────────────────────────────────────────
+
+    def test_leverage_skipped_when_position_exists(self):
+        c = self._make_client("-1.0", "ETH")
+        c.ladder_open("ETH", False, 1.0, 10, 3, 1600, 1650)
+        c.exchange.update_leverage.assert_not_called()
+
+    def test_leverage_skipped_when_orders_exist_no_position(self):
+        """No position, but resting orders exist — must not wipe them."""
+        orders = [{"coin": "ETH", "oid": 1, "orderType": "Limit"}]
+        c = self._make_client("0", "ETH", open_orders=orders)
+        c.ladder_open("ETH", True, 1.0, 10, 3, 1400, 1450)
+        c.exchange.update_leverage.assert_not_called()
+
+    def test_leverage_called_on_fresh_entry(self):
+        """No position and no orders → safe to set leverage."""
+        c = self._make_client("0", "ETH")
+        c.ladder_open("ETH", True, 1.0, 10, 3, 1400, 1450)
+        c.exchange.update_leverage.assert_called_once_with(10, "ETH", is_cross=True)
+
+    def test_other_coin_orders_do_not_block_leverage(self):
+        """BTC orders must not prevent leverage update on ETH."""
+        orders = [{"coin": "BTC", "oid": 99}]
+        c = self._make_client("0", "ETH", open_orders=orders)
+        c.ladder_open("ETH", True, 1.0, 10, 3, 1400, 1450)
+        c.exchange.update_leverage.assert_called_once()
+
+    # ── ladder_open: order properties ────────────────────────────────────────
+
+    def test_long_open_is_buy_true(self):
+        c = self._make_client("0", "ETH")
+        c.ladder_open("ETH", True, 1.0, 10, 3, 1400, 1450)
+        for call in c.exchange.order.call_args_list:
+            self.assertTrue(call[0][1])
+
+    def test_short_open_is_buy_false(self):
+        c = self._make_client("0", "ETH")
+        c.ladder_open("ETH", False, 1.0, 10, 3, 1600, 1650)
+        for call in c.exchange.order.call_args_list:
+            self.assertFalse(call[0][1])
+
+    def test_orders_are_gtc(self):
+        c = self._make_client("0", "ETH")
+        c.ladder_open("ETH", True, 1.0, 10, 3, 1400, 1450)
+        for call in c.exchange.order.call_args_list:
+            ot = call[0][4]
+            self.assertIn("limit", ot)
+            self.assertEqual(ot["limit"]["tif"], "Gtc")
+
+    def test_orders_not_reduce_only(self):
+        c = self._make_client("0", "ETH")
+        c.ladder_open("ETH", True, 1.0, 10, 3, 1400, 1450)
+        for call in c.exchange.order.call_args_list:
+            self.assertFalse(call[1].get("reduce_only", False))
+
+    def test_sizes_sum_to_total(self):
+        c = self._make_client("0", "ETH")
+        c.ladder_open("ETH", True, 3.0, 10, 5, 1400, 1490)
+        total = sum(call[0][2] for call in c.exchange.order.call_args_list)
+        self.assertAlmostEqual(total, 3.0, places=7)
+
+    def test_correct_order_count(self):
+        c = self._make_client("0", "ETH")
+        c.ladder_open("ETH", True, 1.0, 10, 5, 1400, 1490)
+        self.assertEqual(c.exchange.order.call_count, 5)
+
+    def test_price_endpoints(self):
+        from client import _round_price
+        c = self._make_client("0", "ETH")
+        c.ladder_open("ETH", True, 1.0, 10, 3, 1400, 1500)
+        prices = [call[0][3] for call in c.exchange.order.call_args_list]
+        self.assertEqual(prices[0], _round_price(1400))
+        self.assertEqual(prices[-1], _round_price(1500))
+
+    def test_parts_too_few_raises(self):
+        c = self._make_client("0", "ETH")
+        with self.assertRaises(ValueError):
+            c.ladder_open("ETH", True, 1.0, 10, 1, 1400, 1500)
+
+    def test_parts_too_many_raises(self):
+        c = self._make_client("0", "ETH")
+        with self.assertRaises(ValueError):
+            c.ladder_open("ETH", True, 1.0, 10, 21, 1400, 1500)
+
+    def test_parts_boundary_2_and_20(self):
+        c = self._make_client("0", "ETH")
+        c.ladder_open("ETH", True, 1.0, 10, 2, 1400, 1500)
+        self.assertEqual(c.exchange.order.call_count, 2)
+        c.exchange.order.reset_mock()
+        c.ladder_open("ETH", True, 1.0, 10, 20, 1400, 1500)
+        self.assertEqual(c.exchange.order.call_count, 20)
+
+    def test_coexistence_existing_close_orders_survive(self):
+        """
+        Critical scenario: user has a short position + existing close ladder orders.
+        Placing a ladder_open to add to that position must not cancel those orders.
+        This is guaranteed by skipping update_leverage when the position exists.
+        """
+        c = self._make_client("-1.0", "ETH")
+        c.ladder_open("ETH", False, 0.5, 10, 3, 1600, 1650)
+        c.exchange.update_leverage.assert_not_called()
+        self.assertEqual(c.exchange.order.call_count, 3)
+
+    def test_coexistence_with_only_orders_no_position(self):
+        """
+        Scenario: user has 5 resting close orders for ETH but position is flat.
+        Adding a ladder_open must not wipe those orders via update_leverage.
+        """
+        close_orders = [{"coin": "ETH", "oid": i} for i in range(5)]
+        c = self._make_client("0", "ETH", open_orders=close_orders)
+        c.ladder_open("ETH", True, 1.0, 5, 3, 1400, 1450)
+        c.exchange.update_leverage.assert_not_called()
+
+    # ── open_position: leverage guard ────────────────────────────────────────
+
+    def test_open_position_leverage_skipped_with_existing_position(self):
+        c = self._make_client("1.0", "ETH")
+        c.open_position("ETH", True, 0.5, 10, limit_px=1500.0)
+        c.exchange.update_leverage.assert_not_called()
+
+    def test_open_position_leverage_skipped_with_existing_orders(self):
+        orders = [{"coin": "ETH", "oid": 7}]
+        c = self._make_client("0", "ETH", open_orders=orders)
+        c.open_position("ETH", True, 0.5, 10, limit_px=1500.0)
+        c.exchange.update_leverage.assert_not_called()
+
+    def test_open_position_leverage_called_on_fresh_entry(self):
+        c = self._make_client("0", "ETH")
+        c.open_position("ETH", True, 0.5, 10, limit_px=1500.0)
+        c.exchange.update_leverage.assert_called_once_with(10, "ETH", is_cross=True)
+
+    def test_open_position_other_coin_orders_do_not_block(self):
+        orders = [{"coin": "BTC", "oid": 5}]
+        c = self._make_client("0", "ETH", open_orders=orders)
+        c.open_position("ETH", True, 0.5, 10, limit_px=1500.0)
+        c.exchange.update_leverage.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

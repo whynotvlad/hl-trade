@@ -99,9 +99,10 @@ class HLClient:
         tp: Optional[float] = None,
         sl: Optional[float] = None,
     ) -> dict:
-        # Skip leverage update if a position already exists — Hyperliquid cancels
-        # all open orders for the coin when leverage changes.
-        if self._find_position(coin) is None:
+        # Skip leverage update if any position OR open orders exist — Hyperliquid
+        # cancels ALL resting orders for the coin whenever leverage changes.
+        _has_orders = any(o.get("coin") == coin for o in self.get_open_orders())
+        if self._find_position(coin) is None and not _has_orders:
             self.exchange.update_leverage(leverage, coin, is_cross=is_cross)
 
         if limit_px is None:
@@ -240,9 +241,10 @@ class HLClient:
     ) -> list[dict]:
         if n_parts < 2 or n_parts > 20:
             raise ValueError("Number of parts must be between 2 and 20.")
-        # Skip leverage update if a position already exists — Hyperliquid cancels
-        # all open orders for the coin when leverage changes.
-        if self._find_position(coin) is None:
+        # Skip leverage update if any position OR open orders exist — Hyperliquid
+        # cancels ALL resting orders for the coin whenever leverage changes.
+        _has_orders = any(o.get("coin") == coin for o in self.get_open_orders())
+        if self._find_position(coin) is None and not _has_orders:
             self.exchange.update_leverage(leverage, coin, is_cross=is_cross)
         prices = [
             _round_price(from_price + (to_price - from_price) * i / (n_parts - 1))
