@@ -43,7 +43,7 @@ DIGEST_TIME = datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc)  # m
 MOVE_1H_PCT  = 3.0    # % move in 1 hour to trigger quick-move alert
 MOVE_24H_PCT = 8.0    # % move in 24 hours to trigger big-move alert
 MOVE_COOLDOWN = 2 * 3600  # seconds before re-alerting same coin+tier
-WEB_APP_URL    = "https://whynotvlad.github.io/hl-trade/open.html?v=7"
+WEB_APP_URL    = "https://whynotvlad.github.io/hl-trade/open.html?v=8"
 LADDER_FORM_URL = "https://whynotvlad.github.io/hl-trade/ladder.html?v=1"
 
 QUICK_KEYS = ReplyKeyboardMarkup(
@@ -1150,6 +1150,48 @@ async def handle_chart_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await context.bot.send_message(chat_id=tg_id, text=f"Error: {e}")
 
 
+async def cmd_overview(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    await update.message.reply_text("Fetching overview…")
+    try:
+        client = _get_client(update.effective_user.id)
+        prices = client.get_prices()
+        ctx    = client.get_asset_contexts()
+
+        charts = []
+        for coin in ("BTC", "ETH"):
+            candles = client.get_candles(coin, "1h", hours=24)
+            buf     = _build_chart(candles, coin, "1h")
+
+            px      = float(prices.get(coin, 0))
+            hi      = max(float(c["h"]) for c in candles)
+            lo      = min(float(c["l"]) for c in candles)
+            open24  = float(candles[0]["o"]) if candles else px
+            chg_pct = (px - open24) / open24 * 100 if open24 else 0
+            chg_sign = "+" if chg_pct >= 0 else ""
+            chg_emoji = "📈" if chg_pct >= 0 else "📉"
+
+            funding_raw = ctx.get(coin, {}).get("funding")
+            oi_raw      = ctx.get(coin, {}).get("openInterest")
+            funding_str = f"{float(funding_raw)*100:+.4f}%/8h" if funding_raw is not None else "n/a"
+            oi_str      = f"${float(oi_raw)/1e9:.2f}B" if oi_raw is not None else "n/a"
+
+            caption = (
+                f"{chg_emoji} <b>{coin}</b>  ${px:,.2f}\n"
+                f"24h: <b>{chg_sign}{chg_pct:.2f}%</b>   "
+                f"H ${hi:,.2f}  /  L ${lo:,.2f}\n"
+                f"Funding: <b>{funding_str}</b>   OI: {oi_str}"
+            )
+            charts.append((buf, caption))
+
+        for buf, caption in charts:
+            await update.message.reply_photo(photo=buf, caption=caption, parse_mode="HTML")
+
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+
 async def cmd_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
@@ -1577,6 +1619,42 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(preview)
             return
 
+        if form_type == "open_ladder":
+            coin       = data["coin"].upper()
+            side       = data["side"]
+            total_size = float(data["size"])
+            leverage   = int(data["leverage"])
+            n_parts    = int(data["parts"])
+            from_price = float(data["from_price"])
+            to_price   = float(data["to_price"])
+            is_buy     = side == "long"
+
+            client = _get_client(update.effective_user.id)
+            prices_list = [
+                round(from_price + (to_price - from_price) * i / (n_parts - 1), 2)
+                for i in range(n_parts)
+            ]
+            pct_each = round(100 / n_parts, 1)
+            levels_text = "\n".join(
+                f"   {i+1}. {pct_each}% @ ${px:,.2f}" for i, px in enumerate(prices_list)
+            )
+            dir_label = "🟢 LONG" if is_buy else "🔴 SHORT"
+            preview = (
+                f"Ladder Open Preview\n\n"
+                f"{dir_label} {coin}  {leverage}x  ({n_parts} orders)\n"
+                f"Total size: {total_size} {coin}\n\n"
+                f"{levels_text}\n\n"
+                f"Send /confirm to execute or /dismiss to cancel.\n"
+                f"Expires in {CONFIRM_TTL}s."
+            )
+            _store_pending(
+                update.effective_user.id, preview,
+                lambda c=coin, b=is_buy, sz=total_size, lev=leverage, n=n_parts, fp=from_price, tp=to_price:
+                    client.ladder_open(c, b, sz, lev, n, fp, tp),
+            )
+            await update.message.reply_text(preview)
+            return
+
         # Default: open order form
         coin        = data["coin"].upper()
         side        = data["side"]
@@ -1948,6 +2026,7 @@ async def _post_init(app: Application):
         BotCommand("orders",      "Resting orders"),
         BotCommand("pnl",         "7-day realised PnL"),
         BotCommand("risk",        "Margin & liquidation risk"),
+        BotCommand("overview",    "BTC & ETH charts, prices, funding rates"),
         BotCommand("chart",       "Candlestick chart — /chart BTC 1h"),
         BotCommand("price",       "Current price — /price BTC"),
         BotCommand("alert",       "Set price alert — /alert BTC 70000"),
@@ -1991,6 +2070,7 @@ def main():
         ("sl",          cmd_sl),
         ("cancel",      cmd_cancel),
         ("orders",      cmd_orders),
+        ("overview",    cmd_overview),
         ("chart",       cmd_chart),
         ("price",       cmd_price),
         ("assets",      cmd_assets),

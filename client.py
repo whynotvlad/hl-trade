@@ -224,6 +224,49 @@ class HLClient:
 
         return results
 
+    def ladder_open(
+        self,
+        coin: str,
+        is_buy: bool,
+        total_size: float,
+        leverage: int,
+        n_parts: int,
+        from_price: float,
+        to_price: float,
+        is_cross: bool = True,
+    ) -> list[dict]:
+        if n_parts < 2 or n_parts > 20:
+            raise ValueError("Number of parts must be between 2 and 20.")
+        self.exchange.update_leverage(leverage, coin, is_cross=is_cross)
+        prices = [
+            _round_price(from_price + (to_price - from_price) * i / (n_parts - 1))
+            for i in range(n_parts)
+        ]
+        per_order = round(total_size / n_parts, 8)
+        results = []
+        placed = 0.0
+        for i, px in enumerate(prices):
+            sz = round(total_size - placed, 8) if i == n_parts - 1 else per_order
+            if sz <= 0:
+                continue
+            result = self.exchange.order(coin, is_buy, sz, px, {"limit": {"tif": "Gtc"}})
+            results.append(result)
+            placed = round(placed + sz, 8)
+        return results
+
+    def get_asset_contexts(self) -> dict:
+        """Returns per-coin market data: funding, openInterest, markPx, etc."""
+        import requests as _r
+        resp = _r.post(
+            f"{self._base_url}/info",
+            json={"type": "metaAndAssetCtxs"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        meta, ctxs = resp.json()
+        coins = [a["name"] for a in meta["universe"]]
+        return {coins[i]: ctxs[i] for i in range(min(len(coins), len(ctxs)))}
+
     def set_tp(
         self,
         coin: str,
