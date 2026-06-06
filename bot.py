@@ -2151,44 +2151,50 @@ async def _poll_notifications(context: ContextTypes.DEFAULT_TYPE):
                         ),
                     )
 
-            # Fill notifications via get_fills() with timestamp tracking
-            last_ts = _last_fill_ts.get(tg_id, 0)
-            new_last = last_ts
+            # Fill notifications via get_fills() with timestamp tracking.
+            # _last_fill_ts uses None as sentinel for "first poll since boot"
+            # so we never replay history on restart.
             try:
                 fills = client.get_fills(days=1)
-                for f in sorted(fills, key=lambda x: float(x.get("time", 0))):
-                    fill_ts = float(f.get("time", 0))
-                    if fill_ts <= last_ts:
-                        continue
-                    new_last = max(new_last, fill_ts)
-                    coin        = f.get("coin", "?")
-                    fill_px     = float(f.get("px", 0))
-                    fill_sz     = float(f.get("sz", 0))
-                    is_buy      = f.get("side") == "B"
-                    closed_pnl  = float(f.get("closedPnl", 0))
-                    order_type  = f.get("orderType", "")
+                last_ts = _last_fill_ts.get(tg_id)  # None = never seeded
+                if last_ts is None:
+                    # First poll after (re)start — seed cursor, send nothing
+                    _last_fill_ts[tg_id] = max(
+                        (float(f.get("time", 0)) for f in fills),
+                        default=time.time() * 1000,
+                    )
+                else:
+                    new_last = last_ts
+                    for f in sorted(fills, key=lambda x: float(x.get("time", 0))):
+                        fill_ts = float(f.get("time", 0))
+                        if fill_ts <= last_ts:
+                            continue
+                        new_last = max(new_last, fill_ts)
+                        coin        = f.get("coin", "?")
+                        fill_px     = float(f.get("px", 0))
+                        fill_sz     = float(f.get("sz", 0))
+                        is_buy      = f.get("side") == "B"
+                        closed_pnl  = float(f.get("closedPnl", 0))
+                        order_type  = f.get("orderType", "")
 
-                    if "Take Profit" in order_type:
-                        pnl_str = f"+${closed_pnl:,.2f}" if closed_pnl >= 0 else f"-${abs(closed_pnl):,.2f}"
-                        msg = f"🎯 Take-Profit filled!\n\n{coin} @ ${fill_px:,.2f}\nPnL: {pnl_str}"
-                    elif "Stop" in order_type:
-                        pnl_str = f"+${closed_pnl:,.2f}" if closed_pnl >= 0 else f"-${abs(closed_pnl):,.2f}"
-                        msg = f"🛑 Stop-Loss filled!\n\n{coin} @ ${fill_px:,.2f}\nPnL: {pnl_str}"
-                    elif closed_pnl != 0:
-                        pnl_str = f"+${closed_pnl:,.2f}" if closed_pnl >= 0 else f"-${abs(closed_pnl):,.2f}"
-                        side_lbl = "BUY" if is_buy else "SELL"
-                        msg = f"✅ Fill: {coin} {side_lbl} {fill_sz} @ ${fill_px:,.2f}\nPnL: {pnl_str}"
-                    else:
-                        side_lbl = "BUY" if is_buy else "SELL"
-                        msg = f"✅ Fill: {coin} {side_lbl} {fill_sz} @ ${fill_px:,.2f}"
+                        if "Take Profit" in order_type:
+                            pnl_str = f"+${closed_pnl:,.2f}" if closed_pnl >= 0 else f"-${abs(closed_pnl):,.2f}"
+                            msg = f"🎯 Take-Profit filled!\n\n{coin} @ ${fill_px:,.2f}\nPnL: {pnl_str}"
+                        elif "Stop" in order_type:
+                            pnl_str = f"+${closed_pnl:,.2f}" if closed_pnl >= 0 else f"-${abs(closed_pnl):,.2f}"
+                            msg = f"🛑 Stop-Loss filled!\n\n{coin} @ ${fill_px:,.2f}\nPnL: {pnl_str}"
+                        elif closed_pnl != 0:
+                            pnl_str = f"+${closed_pnl:,.2f}" if closed_pnl >= 0 else f"-${abs(closed_pnl):,.2f}"
+                            side_lbl = "BUY" if is_buy else "SELL"
+                            msg = f"✅ Fill: {coin} {side_lbl} {fill_sz} @ ${fill_px:,.2f}\nPnL: {pnl_str}"
+                        else:
+                            side_lbl = "BUY" if is_buy else "SELL"
+                            msg = f"✅ Fill: {coin} {side_lbl} {fill_sz} @ ${fill_px:,.2f}"
 
-                    await context.bot.send_message(chat_id=tg_id, text=msg)
+                        await context.bot.send_message(chat_id=tg_id, text=msg)
 
-                if new_last > last_ts:
-                    _last_fill_ts[tg_id] = new_last
-                elif tg_id not in _last_fill_ts:
-                    # First run — seed with now so we don't replay history
-                    _last_fill_ts[tg_id] = time.time() * 1000
+                    if new_last > last_ts:
+                        _last_fill_ts[tg_id] = new_last
             except Exception:
                 pass  # fills are best-effort, don't break the poll loop
 
