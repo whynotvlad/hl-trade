@@ -1,6 +1,6 @@
 from typing import Optional
 import os
-import typer
+import typer # type: ignore
 from client import HLClient
 import config
 import display
