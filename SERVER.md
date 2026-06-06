@@ -75,10 +75,16 @@ EnvironmentFile=/root/hl-trade/.env
 ExecStart=/root/hl-trade/.venv/bin/python bot.py
 Restart=on-failure
 RestartSec=10
+KillMode=control-group
+TimeoutStopSec=15
+RestartPreventExitStatus=77
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+> **Exit code 77** is reserved for "another instance already running" (fcntl lock guard in bot.py).
+> `RestartPreventExitStatus=77` tells systemd not to restart when a duplicate instance exits.
 
 ### Useful service commands
 
