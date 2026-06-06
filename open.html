@@ -2,37 +2,49 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Open Trade</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Open Trade <!-- v9 --></title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="lib/webapp_logic.js"></script>
   <style>
+    :root {
+      --bg:       #0f0f12;
+      --card:     #1c1c20;
+      --border:   #27272a;
+      --text:     #f4f4f5;
+      --hint:     #52525b;
+      --accent:   #2563eb;
+      --acc-text: #ffffff;
+    }
     * { box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f0f12; color: #f4f4f5;
-      padding: 16px 16px 110px; font-size: 15px; margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg); color: var(--text);
+      padding: 16px 16px 90px; font-size: 15px; margin: 0;
+      -webkit-tap-highlight-color: transparent;
     }
     .header {
       display: flex; align-items: center; gap: 10px;
-      margin-bottom: 24px; padding-bottom: 16px;
-      border-bottom: 1px solid #27272a;
+      margin-bottom: 20px; padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
     }
     .header-icon { font-size: 22px; }
-    .header h1  { font-size: 18px; font-weight: 700; margin: 0; }
-    .header p   { font-size: 12px; color: #71717a; margin: 2px 0 0; }
+    .header h1 { font-size: 18px; font-weight: 700; margin: 0; }
+    .header p  { font-size: 12px; color: var(--hint); margin: 2px 0 0; }
 
-    .section { margin-bottom: 20px; }
+    .section { margin-bottom: 18px; }
     .lbl {
       font-size: 11px; font-weight: 700; text-transform: uppercase;
-      letter-spacing: .06em; color: #52525b; margin-bottom: 8px;
+      letter-spacing: .06em; color: var(--hint); margin-bottom: 8px;
     }
     .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
     button.tog {
-      padding: 13px 10px; border: 1.5px solid #27272a; border-radius: 12px;
-      background: #1c1c20; color: #52525b;
+      padding: 13px 10px; border: 1.5px solid var(--border); border-radius: 12px;
+      background: var(--card); color: var(--hint);
       font-size: 14px; font-weight: 700; cursor: pointer; width: 100%;
       transition: border-color .15s, color .15s, background .15s;
+      -webkit-appearance: none;
     }
     button.tog.on-long   { border-color: #16a34a; color: #22c55e; background: rgba(22,163,74,.12); }
     button.tog.on-short  { border-color: #dc2626; color: #f87171; background: rgba(220,38,38,.12); }
@@ -41,37 +53,59 @@
 
     input[type=text], input[type=number] {
       width: 100%; padding: 13px 14px; border-radius: 12px;
-      border: 1.5px solid #27272a; background: #1c1c20; color: #f4f4f5;
+      border: 1.5px solid var(--border); background: var(--card); color: var(--text);
       font-size: 16px; outline: none; -webkit-appearance: none;
       transition: border-color .15s;
     }
     input:focus { border-color: #3f3f46; }
 
+    .price-pill {
+      display: none; margin-top: 8px;
+      font-size: 12px; font-weight: 600; color: var(--hint);
+      padding: 5px 10px; background: var(--card);
+      border-radius: 8px; border: 1px solid var(--border);
+      display: none; align-items: center; gap: 6px;
+    }
+    .price-pill.visible { display: flex; }
+    .price-dot { width: 6px; height: 6px; border-radius: 50%; background: #22c55e; }
+
+    .margin-row {
+      display: none; margin-top: 8px;
+      font-size: 12px; color: var(--hint);
+      padding: 8px 12px; background: var(--card);
+      border-radius: 8px; border: 1px solid var(--border);
+      line-height: 1.6;
+    }
+    .margin-row.visible { display: block; }
+    .margin-row b { color: var(--text); }
+
     .chips { display: flex; gap: 8px; flex-wrap: wrap; }
     .chip {
-      padding: 9px 18px; border-radius: 999px; border: 1.5px solid #27272a;
-      background: #1c1c20; color: #52525b;
+      padding: 9px 18px; border-radius: 999px; border: 1.5px solid var(--border);
+      background: var(--card); color: var(--hint);
       font-size: 14px; font-weight: 600; cursor: pointer;
       transition: border-color .15s, color .15s, background .15s;
+      -webkit-tap-highlight-color: transparent;
     }
     .chip.on        { border-color: #2563eb; color: #60a5fa; background: rgba(37,99,235,.12); }
     .chip.on-purple { border-color: #7c3aed; color: #a78bfa; background: rgba(124,58,237,.12); }
 
     .preview-card {
-      background: #1c1c20; border: 1.5px solid #27272a;
+      background: var(--card); border: 1.5px solid var(--border);
       border-radius: 14px; padding: 14px 16px;
-      font-size: 13px; color: #71717a; line-height: 1.65; margin-top: 4px;
+      font-size: 13px; color: var(--hint); line-height: 1.65; margin-top: 4px;
     }
-    .preview-card .preview-title {
+    .preview-title {
       font-size: 11px; font-weight: 700; text-transform: uppercase;
-      letter-spacing: .06em; color: #52525b; margin-bottom: 8px;
+      letter-spacing: .06em; color: var(--hint); margin-bottom: 8px;
     }
-    .preview-card .val { color: #f4f4f5; font-weight: 600; }
+    .val { color: var(--text); font-weight: 600; }
     .level-row { display: flex; justify-content: space-between; }
-    .level-num { color: #52525b; }
+    .level-num { color: var(--hint); }
 
-    .divider { height: 1px; background: #27272a; margin: 20px 0; }
+    .divider { height: 1px; background: var(--border); margin: 18px 0; }
 
+    /* Fallback button — hidden when MainButton is available */
     #go {
       width: 100%; padding: 16px; margin-top: 4px;
       border: none; border-radius: 14px;
@@ -81,8 +115,8 @@
     }
     #go:active { opacity: .85; }
     #go.short  { background: #dc2626; }
-    #go.ladder-long  { background: #7c3aed; }
-    #go.ladder-short { background: #7c3aed; }
+    #go.ladder { background: #7c3aed; }
+    #go.hidden { display: none; }
   </style>
 </head>
 <body>
@@ -95,7 +129,6 @@
   </div>
 </div>
 
-<!-- Order mode -->
 <div class="section">
   <div class="lbl">Order Mode</div>
   <div class="row2">
@@ -104,7 +137,6 @@
   </div>
 </div>
 
-<!-- Direction -->
 <div class="section">
   <div class="lbl">Direction</div>
   <div class="row2">
@@ -113,25 +145,27 @@
   </div>
 </div>
 
-<!-- Coin -->
 <div class="section">
   <div class="lbl">Coin</div>
   <input type="text" id="coin" placeholder="BTC, ETH, SOL …" list="coins"
-         oninput="this.value=this.value.toUpperCase();upd()" autocomplete="off" />
+         oninput="onCoinInput()" autocomplete="off" />
   <datalist id="coins">
     <option value="BTC"/><option value="ETH"/><option value="SOL"/>
     <option value="AVAX"/><option value="ARB"/><option value="DOGE"/>
     <option value="LINK"/><option value="OP"/><option value="APT"/>
+    <option value="SUI"/><option value="TIA"/><option value="WIF"/>
   </datalist>
+  <div class="price-pill" id="price-pill">
+    <span class="price-dot"></span>
+    <span id="price-text"></span>
+  </div>
 </div>
 
-<!-- Size -->
 <div class="section">
   <div class="lbl">Size (base coin)</div>
   <input type="number" id="size" placeholder="e.g. 0.001" step="any" min="0" oninput="upd()" />
 </div>
 
-<!-- Leverage -->
 <div class="section">
   <div class="lbl">Leverage</div>
   <div class="chips" id="lev-chips">
@@ -140,9 +174,9 @@
     <div class="chip"    id="l10" onclick="setLev(10)">10×</div>
     <div class="chip"    id="l20" onclick="setLev(20)">20×</div>
   </div>
+  <div class="margin-row" id="margin-row"></div>
 </div>
 
-<!-- SINGLE MODE: order type + TP/SL -->
 <div id="single-section">
   <div class="section">
     <div class="lbl">Order Type</div>
@@ -157,21 +191,20 @@
   <div class="section">
     <div class="lbl">TP / SL (optional)</div>
     <div class="row2">
-      <input type="number" id="tp" placeholder="Take profit $" step="any" min="0" />
-      <input type="number" id="sl" placeholder="Stop loss $"   step="any" min="0" />
+      <input type="number" id="tp" placeholder="Take profit $" step="any" min="0" oninput="upd()" />
+      <input type="number" id="sl" placeholder="Stop loss $"   step="any" min="0" oninput="upd()" />
     </div>
   </div>
 </div>
 
-<!-- LADDER MODE: parts + price range -->
 <div id="ladder-section" style="display:none">
   <div class="section">
     <div class="lbl">Parts</div>
     <div class="chips">
-      <div class="chip"    id="p2"  onclick="setParts(2)">2</div>
-      <div class="chip on-purple" id="p3"  onclick="setParts(3)">3</div>
-      <div class="chip"    id="p5"  onclick="setParts(5)">5</div>
-      <div class="chip"    id="p10" onclick="setParts(10)">10</div>
+      <div class="chip"          id="p2"  onclick="setParts(2)">2</div>
+      <div class="chip on-purple" id="p3" onclick="setParts(3)">3</div>
+      <div class="chip"          id="p5"  onclick="setParts(5)">5</div>
+      <div class="chip"          id="p10" onclick="setParts(10)">10</div>
     </div>
   </div>
   <div class="section">
@@ -180,7 +213,7 @@
       <input type="number" id="from-price" placeholder="From $" step="any" min="0" oninput="upd()" />
       <input type="number" id="to-price"   placeholder="To $"   step="any" min="0" oninput="upd()" />
     </div>
-    <div style="font-size:12px;color:#52525b;margin-top:8px;">
+    <div style="font-size:12px;color:var(--hint);margin-top:8px">
       Orders spread evenly across this range. Size split equally per order.
     </div>
   </div>
@@ -196,170 +229,359 @@
 <button id="go" onclick="submit()">Preview Order</button>
 
 <script>
-var tg = null;
-try { tg = window.Telegram.WebApp; tg.ready(); tg.expand(); if (tg.MainButton) tg.MainButton.hide(); } catch(e) {}
+// ── Telegram WebApp init ──────────────────────────────────────────────────────
+var tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+var MB = null; // MainButton
+var BB = null; // BackButton
+var hasTG = false;
 
-var mode  = 'single';
-var side  = 'long';
+if (tg) {
+  tg.ready();
+  tg.expand();
+  hasTG = true;
+
+  // Theme
+  (function applyTheme() {
+    var p = tg.themeParams || {};
+    var r = document.documentElement;
+    if (p.bg_color)           { r.style.setProperty("--bg",   p.bg_color);      try { tg.setBackgroundColor(p.bg_color); } catch(e){} }
+    if (p.secondary_bg_color) r.style.setProperty("--card",   p.secondary_bg_color);
+    if (p.text_color)         r.style.setProperty("--text",   p.text_color);
+    if (p.hint_color)         r.style.setProperty("--hint",   p.hint_color);
+    if (p.button_color)       r.style.setProperty("--accent", p.button_color);
+    if (p.button_text_color)  r.style.setProperty("--acc-text", p.button_text_color);
+    try { tg.setHeaderColor(p.secondary_bg_color || "#1c1c20"); } catch(e){}
+  })();
+
+  // MainButton
+  if (tg.MainButton) {
+    MB = tg.MainButton;
+    MB.setText("Preview Order");
+    MB.show();
+    MB.onClick(submit);
+    document.getElementById("go").classList.add("hidden"); // hide fallback
+  }
+
+  // BackButton (used when in ladder mode)
+  if (tg.BackButton) {
+    BB = tg.BackButton;
+    BB.onClick(function() { setMode("single"); });
+  }
+}
+
+// ── Haptics helper ────────────────────────────────────────────────────────────
+var hap = {
+  tap:     function() { try { tg.HapticFeedback.impactOccurred("light");  } catch(e){} },
+  select:  function() { try { tg.HapticFeedback.selectionChanged();        } catch(e){} },
+  medium:  function() { try { tg.HapticFeedback.impactOccurred("medium"); } catch(e){} },
+  error:   function() { try { tg.HapticFeedback.notificationOccurred("error");   } catch(e){} },
+  success: function() { try { tg.HapticFeedback.notificationOccurred("success"); } catch(e){} },
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+var mode  = "single";
+var side  = "long";
 var lev   = 5;
-var otype = 'market';
+var otype = "market";
 var parts = 3;
+var livePx = 0; // fetched live price
+var priceTimer = null;
 
+// ── Mode / Side / Controls ────────────────────────────────────────────────────
 function setMode(m) {
   mode = m;
-  document.getElementById('b-single').className = 'tog' + (m === 'single' ? ' on-blue'   : '');
-  document.getElementById('b-ladder').className = 'tog' + (m === 'ladder' ? ' on-purple' : '');
-  document.getElementById('single-section').style.display = m === 'single' ? '' : 'none';
-  document.getElementById('ladder-section').style.display = m === 'ladder' ? '' : 'none';
-  document.getElementById('header-sub').textContent =
-    m === 'ladder' ? 'Split entry across multiple limit orders' : 'Perpetuals — market or limit';
-  updateGoBtn();
+  hap.select();
+  document.getElementById("b-single").className = "tog" + (m === "single" ? " on-blue"   : "");
+  document.getElementById("b-ladder").className = "tog" + (m === "ladder" ? " on-purple" : "");
+  document.getElementById("single-section").style.display = m === "single" ? "" : "none";
+  document.getElementById("ladder-section").style.display = m === "ladder" ? "" : "none";
+  document.getElementById("header-sub").textContent =
+    m === "ladder" ? "Split entry across multiple limit orders" : "Perpetuals — market or limit";
+  // BackButton: show in ladder mode, hide in single
+  if (BB) { if (m === "ladder") BB.show(); else BB.hide(); }
+  // Lever chips style
+  var levIds = ["l2","l5","l10","l20"], levVals = [2,5,10,20];
+  var levCls = m === "ladder" ? " on-purple" : " on";
+  for (var i = 0; i < levIds.length; i++)
+    document.getElementById(levIds[i]).className = "chip" + (levVals[i] === lev ? levCls : "");
+  updateMainBtn();
   upd();
 }
 
 function setSide(s) {
   side = s;
-  document.getElementById('b-long').className  = 'tog' + (s === 'long'  ? ' on-long'  : '');
-  document.getElementById('b-short').className = 'tog' + (s === 'short' ? ' on-short' : '');
-  updateGoBtn();
+  hap.tap();
+  document.getElementById("b-long").className  = "tog" + (s === "long"  ? " on-long"  : "");
+  document.getElementById("b-short").className = "tog" + (s === "short" ? " on-short" : "");
+  updateMainBtn();
   upd();
 }
 
 function setLev(n) {
+  hap.tap();
   lev = n;
-  var ids = ['l2','l5','l10','l20'], vals = [2,5,10,20];
-  var cls = mode === 'ladder' ? ' on-purple' : ' on';
+  var ids = ["l2","l5","l10","l20"], vals = [2,5,10,20];
+  var cls = mode === "ladder" ? " on-purple" : " on";
   for (var i = 0; i < ids.length; i++)
-    document.getElementById(ids[i]).className = 'chip' + (vals[i] === n ? cls : '');
+    document.getElementById(ids[i]).className = "chip" + (vals[i] === n ? cls : "");
   upd();
 }
 
 function setType(t) {
+  hap.tap();
   otype = t;
-  document.getElementById('b-mkt').className = 'tog' + (t === 'market' ? ' on-blue' : '');
-  document.getElementById('b-lmt').className = 'tog' + (t === 'limit'  ? ' on-blue' : '');
-  document.getElementById('lmt-row').style.display = t === 'limit' ? 'block' : 'none';
+  document.getElementById("b-mkt").className = "tog" + (t === "market" ? " on-blue" : "");
+  document.getElementById("b-lmt").className = "tog" + (t === "limit"  ? " on-blue" : "");
+  document.getElementById("lmt-row").style.display = t === "limit" ? "block" : "none";
   upd();
 }
 
 function setParts(n) {
+  hap.tap();
   parts = n;
-  var ids = ['p2','p3','p5','p10'], vals = [2,3,5,10];
+  var ids = ["p2","p3","p5","p10"], vals = [2,3,5,10];
   for (var i = 0; i < ids.length; i++)
-    document.getElementById(ids[i]).className = 'chip' + (vals[i] === n ? ' on-purple' : '');
+    document.getElementById(ids[i]).className = "chip" + (vals[i] === n ? " on-purple" : "");
   upd();
 }
 
-function updateGoBtn() {
-  var btn = document.getElementById('go');
-  if (mode === 'ladder') {
-    btn.className = 'ladder-' + side;
-    btn.textContent = '🪜 Preview Ladder';
+function updateMainBtn() {
+  if (!MB) {
+    var btn = document.getElementById("go");
+    btn.className = mode === "ladder" ? "ladder" : (side === "short" ? "short" : "");
+    btn.textContent = mode === "ladder" ? "🪜 Preview Ladder" : "Preview Order";
+    return;
+  }
+  if (mode === "ladder") {
+    MB.setText("🪜 Preview Ladder");
+    try { MB.color = "#7c3aed"; } catch(e){}
   } else {
-    btn.className = side;
-    btn.textContent = 'Preview Order';
+    MB.setText(side === "long" ? "🟢 Preview Order" : "🔴 Preview Order");
+    try { MB.color = (tg.themeParams && tg.themeParams.button_color) || "#2563eb"; } catch(e){}
   }
 }
 
-function fmt(n) {
-  return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+// ── Live price ────────────────────────────────────────────────────────────────
+function onCoinInput() {
+  var coin = document.getElementById("coin").value.toUpperCase();
+  document.getElementById("coin").value = coin;
+  clearTimeout(priceTimer);
+  if (coin.length >= 2) priceTimer = setTimeout(function() { fetchPrice(coin); }, 500);
+  upd();
 }
 
-function roundPrice(px) {
-  if (px <= 0) return px;
-  var mag = Math.floor(Math.log10(Math.abs(px)));
-  return Math.round(px * Math.pow(10, 4 - mag)) / Math.pow(10, 4 - mag);
+async function fetchPrice(coin) {
+  try {
+    var resp = await fetch("https://api.hyperliquid.xyz/info", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({type: "allMids"})
+    });
+    var mids = await resp.json();
+    livePx = mids[coin] ? parseFloat(mids[coin]) : 0;
+    var pill = document.getElementById("price-pill");
+    var txt  = document.getElementById("price-text");
+    if (livePx > 0) {
+      txt.textContent = coin + " · " + fmtPrice(livePx);
+      pill.classList.add("visible");
+    } else {
+      pill.classList.remove("visible");
+    }
+    upd();
+  } catch(e) { /* silently ignore */ }
+}
+
+// ── Margin / notional ─────────────────────────────────────────────────────────
+function updateMarginRow() {
+  var el   = document.getElementById("margin-row");
+  var size = parseFloat(document.getElementById("size").value);
+  var px   = livePx;
+  if (!px && otype === "limit") px = parseFloat(document.getElementById("lmt-px").value) || 0;
+  if (isNaN(size) || size <= 0 || px <= 0) { el.classList.remove("visible"); return; }
+  var notional = calcNotional(px, size);
+  var margin   = calcMargin(px, size, lev);
+  el.innerHTML = "Notional <b>" + fmtUSD(notional) + "</b> · Margin <b>" + fmtUSD(margin) + "</b>";
+  el.classList.add("visible");
+}
+
+// ── Preview card ──────────────────────────────────────────────────────────────
+function fmt(n) { return n.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+function fmtPrice(px) {
+  if (px >= 10000) return "$" + Math.round(px).toLocaleString("en-US");
+  if (px >= 1000)  return "$" + px.toLocaleString("en-US", {maximumFractionDigits: 1});
+  if (px >= 1)     return "$" + px.toFixed(2);
+  return "$" + px.toFixed(4);
 }
 
 function upd() {
-  var coin = document.getElementById('coin').value.trim();
-  var size = parseFloat(document.getElementById('size').value);
-  var el   = document.getElementById('summary');
-
+  updateMarginRow();
+  var coin = document.getElementById("coin").value.trim();
+  var size = parseFloat(document.getElementById("size").value);
+  var el   = document.getElementById("summary");
   if (!coin || isNaN(size) || size <= 0) {
-    el.innerHTML = 'Fill in coin and size to see a summary.';
+    el.innerHTML = "Fill in coin and size to see a summary.";
     return;
   }
-
-  var dir = side === 'long' ? '🟢 Long' : '🔴 Short';
-
-  if (mode === 'single') {
-    var lmtpx = parseFloat(document.getElementById('lmt-px').value);
-    var px    = (otype === 'limit' && !isNaN(lmtpx)) ? lmtpx : null;
-    var pxLbl = px ? ('$' + fmt(px) + ' limit') : 'market price';
-    var tp = parseFloat(document.getElementById('tp').value);
-    var sl = parseFloat(document.getElementById('sl').value);
-    var extras = '';
-    if (!isNaN(tp) && tp > 0) extras += '<br>Take-profit: <span class="val">$' + fmt(tp) + '</span>';
-    if (!isNaN(sl) && sl > 0) extras += '<br>Stop-loss: <span class="val">$' + fmt(sl) + '</span>';
-    el.innerHTML =
-      dir + ' <span class="val">' + size + ' ' + coin + '</span>' +
-      ' @ <span class="val">' + pxLbl + '</span><br>' +
-      'Leverage: <span class="val">' + lev + '×</span>' + extras;
+  var dir = side === "long" ? "🟢 Long" : "🔴 Short";
+  if (mode === "single") {
+    var lmtpx = parseFloat(document.getElementById("lmt-px").value);
+    var pxLbl = (otype === "limit" && !isNaN(lmtpx)) ? "$" + fmt(lmtpx) + " limit" : "market price";
+    var tp = parseFloat(document.getElementById("tp").value);
+    var sl = parseFloat(document.getElementById("sl").value);
+    var extras = "";
+    if (!isNaN(tp) && tp > 0) extras += "<br>Take-profit: <span class='val'>$" + fmt(tp) + "</span>";
+    if (!isNaN(sl) && sl > 0) extras += "<br>Stop-loss: <span class='val'>$" + fmt(sl) + "</span>";
+    el.innerHTML = dir + " <span class='val'>" + size + " " + coin + "</span>" +
+      " @ <span class='val'>" + pxLbl + "</span><br>" +
+      "Leverage: <span class='val'>" + lev + "×</span>" + extras;
   } else {
-    var fp = parseFloat(document.getElementById('from-price').value);
-    var tp2 = parseFloat(document.getElementById('to-price').value);
+    var fp  = parseFloat(document.getElementById("from-price").value);
+    var tp2 = parseFloat(document.getElementById("to-price").value);
     if (isNaN(fp) || isNaN(tp2)) {
-      el.innerHTML = dir + ' <span class="val">' + size + ' ' + coin + '</span>  ' + lev + '× — fill in price range.';
+      el.innerHTML = dir + " <span class='val'>" + size + " " + coin + "</span>  " + lev + "× — fill in price range.";
       return;
     }
-    var pct = (100 / parts).toFixed(1);
-    var perSz = (size / parts).toFixed(6);
-    var html = '<div style="color:#f4f4f5;font-weight:600;margin-bottom:8px">' +
-      dir + ' ' + size + ' ' + coin + '  ' + lev + '×  —  ' + parts + ' orders</div>';
-    for (var i = 0; i < parts; i++) {
-      var px2 = parts > 1 ? fp + (tp2 - fp) * i / (parts - 1) : fp;
-      px2 = roundPrice(px2);
-      html += '<div class="level-row"><span class="level-num">' + (i+1) + '.</span>' +
-        '<span class="val">' + pct + '%</span>' +
-        '<span class="val">$' + px2.toLocaleString('en-US', {maximumFractionDigits: 2}) + '</span>' +
-        '<span style="color:#52525b">' + perSz + ' ' + coin + '</span></div>';
+    if (fp === tp2) {
+      el.innerHTML = "<span style='color:#f97316'>⚠️ From and To prices must differ.</span>";
+      return;
     }
-    if (fp === tp2) html += '<div style="color:#f97316;font-size:12px;margin-top:6px">⚠️ From and To prices must differ.</div>';
+    var pct   = (100 / parts).toFixed(1);
+    var perSz = (size / parts).toFixed(6);
+    var html  = "<div style='color:var(--text);font-weight:600;margin-bottom:8px'>" +
+      dir + " " + size + " " + coin + "  " + lev + "×  —  " + parts + " orders</div>";
+    var prices = calcLadderPrices(fp, tp2, parts);
+    for (var i = 0; i < prices.length; i++) {
+      html += "<div class='level-row'><span class='level-num'>" + (i+1) + ".</span>" +
+        "<span class='val'>" + pct + "%</span>" +
+        "<span class='val'>" + fmtPrice(prices[i]) + "</span>" +
+        "<span style='color:var(--hint)'>" + perSz + " " + coin + "</span></div>";
+    }
     el.innerHTML = html;
   }
 }
 
+// ── Submit ────────────────────────────────────────────────────────────────────
 function submit() {
+  var coin = document.getElementById("coin").value.trim().toUpperCase();
+  var size = document.getElementById("size").value.trim();
+  var errors;
+
+  if (mode === "single") {
+    var lmtpx = document.getElementById("lmt-px").value.trim();
+    var tp    = document.getElementById("tp").value.trim();
+    var sl    = document.getElementById("sl").value.trim();
+    errors = validateOpenForm({coin: coin, size: size, leverage: String(lev),
+                               side: side, tp: tp, sl: sl});
+    if (otype === "limit" && !lmtpx) errors.push("Enter a limit price");
+  } else {
+    var fp  = document.getElementById("from-price").value.trim();
+    var tp2 = document.getElementById("to-price").value.trim();
+    errors = validateLadderOpenForm({coin: coin, size: size, leverage: String(lev),
+                                     side: side, from_price: fp, to_price: tp2,
+                                     parts: String(parts)});
+  }
+
+  if (errors.length > 0) { hap.error(); showAlert(errors[0]); return; }
+
+  // Build summary for native confirm popup
+  var px = livePx;
+  if (!px && otype === "limit") px = parseFloat(document.getElementById("lmt-px").value) || 0;
+  var summary = buildOpenSummary(coin, side, size, lev, px, mode, parts);
+  if (mode === "ladder") {
+    var fp2  = document.getElementById("from-price").value.trim();
+    var tp22 = document.getElementById("to-price").value.trim();
+    summary += "\n$" + parseFloat(fp2).toFixed(2) + " → $" + parseFloat(tp22).toFixed(2);
+  }
+
+  hap.medium();
+  showConfirm("Confirm Order\n\n" + summary, function() {
+    hap.success();
+    doSend(coin, size);
+  });
+}
+
+function doSend(coin, size) {
+  var payload;
+  if (mode === "single") {
+    var lmtpx = document.getElementById("lmt-px").value.trim();
+    var tp    = document.getElementById("tp").value.trim();
+    var sl    = document.getElementById("sl").value.trim();
+    payload = JSON.stringify({
+      form_type: "open", coin: coin, side: side, size: size,
+      leverage: String(lev), order_type: otype,
+      limit_price: lmtpx, tp: tp, sl: sl, pre_confirmed: true
+    });
+  } else {
+    var fp  = document.getElementById("from-price").value.trim();
+    var tp2 = document.getElementById("to-price").value.trim();
+    payload = JSON.stringify({
+      form_type: "open_ladder", coin: coin, side: side, size: size,
+      leverage: String(lev), parts: String(parts),
+      from_price: fp, to_price: tp2, pre_confirmed: true
+    });
+  }
+  saveState();
+  if (tg && tg.sendData) tg.sendData(payload);
+  else alert("Not in Telegram.\n" + payload);
+}
+
+// ── CloudStorage ──────────────────────────────────────────────────────────────
+function saveState() {
+  if (!hasTG || !tg.CloudStorage) return;
   try {
-    var coin = document.getElementById('coin').value.trim().toUpperCase();
-    var size = document.getElementById('size').value.trim();
-    if (!coin)                          { showAlert('Enter a coin, e.g. BTC'); return; }
-    if (!size || parseFloat(size) <= 0) { showAlert('Enter a valid size'); return; }
-    if (lev < 1 || lev > 50)           { showAlert('Leverage must be 1–50'); return; }
-
-    var payload;
-    if (mode === 'single') {
-      var lmtpx = document.getElementById('lmt-px').value.trim();
-      var tp    = document.getElementById('tp').value.trim();
-      var sl    = document.getElementById('sl').value.trim();
-      if (otype === 'limit' && !lmtpx) { showAlert('Enter a limit price'); return; }
-      payload = JSON.stringify({
-        form_type: 'open', coin: coin, side: side,
-        size: size, leverage: String(lev),
-        order_type: otype, limit_price: lmtpx, tp: tp, sl: sl
-      });
-    } else {
-      var fp  = document.getElementById('from-price').value.trim();
-      var tp2 = document.getElementById('to-price').value.trim();
-      if (!fp || parseFloat(fp) <= 0)  { showAlert('Enter a valid From price'); return; }
-      if (!tp2 || parseFloat(tp2) <= 0) { showAlert('Enter a valid To price'); return; }
-      if (parseFloat(fp) === parseFloat(tp2)) { showAlert('From and To prices must differ'); return; }
-      payload = JSON.stringify({
-        form_type: 'open_ladder', coin: coin, side: side,
-        size: size, leverage: String(lev),
-        parts: String(parts), from_price: fp, to_price: tp2
-      });
-    }
-
-    if (tg && tg.sendData) { tg.sendData(payload); }
-    else { alert('Not in Telegram.\n' + payload); }
-  } catch(e) { showAlert('Error: ' + e.message); }
+    tg.CloudStorage.setItem("lastCoin",   document.getElementById("coin").value.trim());
+    tg.CloudStorage.setItem("lastSize",   document.getElementById("size").value.trim());
+    tg.CloudStorage.setItem("lastSide",   side);
+    tg.CloudStorage.setItem("lastLev",    String(lev));
+    tg.CloudStorage.setItem("lastMode",   mode);
+    tg.CloudStorage.setItem("lastParts",  String(parts));
+  } catch(e) {}
 }
 
+function loadState() {
+  if (!hasTG || !tg.CloudStorage) return;
+  try {
+    tg.CloudStorage.getItems(
+      ["lastCoin","lastSize","lastSide","lastLev","lastMode","lastParts"],
+      function(err, vals) {
+        if (err) return;
+        if (vals.lastSide  && (vals.lastSide === "long" || vals.lastSide === "short")) setSide(vals.lastSide);
+        if (vals.lastLev)   { var l = parseInt(vals.lastLev);  if ([2,5,10,20].includes(l)) setLev(l); }
+        if (vals.lastMode)  setMode(vals.lastMode);
+        if (vals.lastParts) { var p = parseInt(vals.lastParts); if ([2,3,5,10].includes(p)) setParts(p); }
+        if (vals.lastCoin)  { document.getElementById("coin").value = vals.lastCoin; fetchPrice(vals.lastCoin); }
+        if (vals.lastSize)  document.getElementById("size").value = vals.lastSize;
+        upd();
+      }
+    );
+  } catch(e) {}
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function showAlert(msg) {
-  try { tg.showAlert(msg); } catch(_) { alert(msg); }
+  if (hasTG && tg.showAlert) tg.showAlert(msg);
+  else alert(msg);
 }
+
+function showConfirm(msg, onOk) {
+  if (hasTG && tg.showPopup) {
+    try {
+      tg.showPopup({
+        title: "Confirm",
+        message: msg,
+        buttons: [{id: "ok", type: "default", text: "Send to Bot"}, {id: "no", type: "cancel"}]
+      }, function(id) { if (id === "ok") onOk(); });
+      return;
+    } catch(e) {}
+  }
+  if (hasTG && tg.showConfirm) { tg.showConfirm(msg, function(ok) { if (ok) onOk(); }); return; }
+  if (confirm(msg)) onOk();
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadState();
+updateMainBtn();
+upd();
 </script>
 </body>
 </html>

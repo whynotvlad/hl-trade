@@ -54,8 +54,8 @@ DIGEST_TIME = datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc)  # m
 MOVE_1H_PCT  = 3.0    # % move in 1 hour to trigger quick-move alert
 MOVE_24H_PCT = 8.0    # % move in 24 hours to trigger big-move alert
 MOVE_COOLDOWN = 2 * 3600  # seconds before re-alerting same coin+tier
-WEB_APP_URL    = "https://whynotvlad.github.io/hl-trade/open.html?v=8"
-LADDER_FORM_URL = "https://whynotvlad.github.io/hl-trade/ladder.html?v=1"
+WEB_APP_URL    = "https://whynotvlad.github.io/hl-trade/open.html?v=9"
+LADDER_FORM_URL = "https://whynotvlad.github.io/hl-trade/ladder.html?v=2"
 
 QUICK_KEYS = ReplyKeyboardMarkup(
     [
@@ -1591,45 +1591,58 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
     import json
     try:
         data = json.loads(update.message.web_app_data.data)
-        form_type = data.get("form_type", "open")
+        form_type      = data.get("form_type", "open")
+        pre_confirmed  = bool(data.get("pre_confirmed", False))
+        tg_id          = update.effective_user.id
 
-        if form_type == "ladder":
-            coin        = data["coin"].upper()
-            ladder_type = data["ladder_type"]  # "ladder" or "slladder"
-            n_parts     = int(data["parts"])
-            from_price  = float(data["from_price"])
-            to_price    = float(data["to_price"])
+        # ── ladder close (limit) ──────────────────────────────────────────────
+        if form_type in ("ladder", "slladder"):
+            coin       = data["coin"].upper()
+            n_parts    = int(data["parts"])
+            from_price = float(data["from_price"])
+            to_price   = float(data["to_price"])
+            size_raw   = data.get("size", "")
+            size_close = float(size_raw) if size_raw and float(size_raw) > 0 else None  # reserved for future partial-close support
 
-            client = _get_client(update.effective_user.id)
+            client = _get_client(tg_id)
 
-            type_label = "📊 Limit Ladder" if ladder_type == "ladder" else "🛑 SL Trigger Ladder"
+            type_label = "📊 Limit Ladder" if form_type == "ladder" else "🛑 SL Trigger Ladder"
             prices = [
                 round(from_price + (to_price - from_price) * i / (n_parts - 1), 2)
                 for i in range(n_parts)
             ]
-            pct_each = round(100 / n_parts, 1)
+            pct_each    = round(100 / n_parts, 1)
             levels_text = "\n".join(
                 f"   {i+1}. {pct_each}% @ ${px:,.2f}" for i, px in enumerate(prices)
             )
+            size_label = f"{size_close} {coin}" if size_close else "full position"
             preview = (
-                f"Ladder Preview\n\n"
-                f"{type_label} — {n_parts} orders for {coin}\n\n"
-                f"{levels_text}\n\n"
-                f"Send /confirm to execute or /dismiss to cancel.\n"
-                f"Expires in {CONFIRM_TTL}s."
+                f"{type_label}\n\n"
+                f"{coin}  —  {size_label}  —  {n_parts} orders\n\n"
+                f"{levels_text}"
             )
             fn = (
                 (lambda c=coin, n=n_parts, fp=from_price, tp=to_price:
                  client.ladder_close(c, n, fp, tp))
-                if ladder_type == "ladder"
+                if form_type == "ladder"
                 else
                 (lambda c=coin, n=n_parts, fp=from_price, tp=to_price:
                  client.slladder_close(c, n, fp, tp))
             )
-            _store_pending(update.effective_user.id, preview, fn)
-            await update.message.reply_text(preview)
+            if pre_confirmed:
+                await update.message.reply_text(f"Executing…\n\n{preview}")
+                result = fn()
+                filled = sum(
+                    1 for s in result.get("response", {}).get("data", {}).get("statuses", [])
+                    if "resting" in s or "filled" in s
+                )
+                await update.message.reply_text(f"✅ {type_label} placed {filled}/{n_parts} orders for {coin}.")
+            else:
+                _store_pending(tg_id, preview + f"\n\nSend /confirm to execute or /dismiss to cancel.\nExpires in {CONFIRM_TTL}s.", fn)
+                await update.message.reply_text(preview + f"\n\nSend /confirm to execute or /dismiss to cancel.\nExpires in {CONFIRM_TTL}s.")
             return
 
+        # ── ladder open ───────────────────────────────────────────────────────
         if form_type == "open_ladder":
             coin       = data["coin"].upper()
             side       = data["side"]
@@ -1640,33 +1653,38 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             to_price   = float(data["to_price"])
             is_buy     = side == "long"
 
-            client = _get_client(update.effective_user.id)
+            client = _get_client(tg_id)
             prices_list = [
                 round(from_price + (to_price - from_price) * i / (n_parts - 1), 2)
                 for i in range(n_parts)
             ]
-            pct_each = round(100 / n_parts, 1)
+            pct_each    = round(100 / n_parts, 1)
             levels_text = "\n".join(
                 f"   {i+1}. {pct_each}% @ ${px:,.2f}" for i, px in enumerate(prices_list)
             )
             dir_label = "🟢 LONG" if is_buy else "🔴 SHORT"
             preview = (
-                f"Ladder Open Preview\n\n"
+                f"Ladder Open\n\n"
                 f"{dir_label} {coin}  {leverage}x  ({n_parts} orders)\n"
                 f"Total size: {total_size} {coin}\n\n"
-                f"{levels_text}\n\n"
-                f"Send /confirm to execute or /dismiss to cancel.\n"
-                f"Expires in {CONFIRM_TTL}s."
+                f"{levels_text}"
             )
-            _store_pending(
-                update.effective_user.id, preview,
-                lambda c=coin, b=is_buy, sz=total_size, lev=leverage, n=n_parts, fp=from_price, tp=to_price:
-                    client.ladder_open(c, b, sz, lev, n, fp, tp),
-            )
-            await update.message.reply_text(preview)
+            fn = lambda c=coin, b=is_buy, sz=total_size, lev=leverage, n=n_parts, fp=from_price, tp=to_price: \
+                client.ladder_open(c, b, sz, lev, n, fp, tp)
+            if pre_confirmed:
+                await update.message.reply_text(f"Executing…\n\n{preview}")
+                result = fn()
+                filled = sum(
+                    1 for s in result.get("response", {}).get("data", {}).get("statuses", [])
+                    if "resting" in s or "filled" in s
+                )
+                await update.message.reply_text(f"✅ Ladder placed {filled}/{n_parts} orders for {coin}.")
+            else:
+                _store_pending(tg_id, preview + f"\n\nSend /confirm to execute or /dismiss to cancel.\nExpires in {CONFIRM_TTL}s.", fn)
+                await update.message.reply_text(preview + f"\n\nSend /confirm to execute or /dismiss to cancel.\nExpires in {CONFIRM_TTL}s.")
             return
 
-        # Default: open order form
+        # ── single open order ─────────────────────────────────────────────────
         coin        = data["coin"].upper()
         side        = data["side"]
         size        = float(data["size"])
@@ -1676,12 +1694,12 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         limit_price = float(data["limit_price"]) if data.get("limit_price") else None
         is_buy      = side == "long"
 
-        client   = _get_client(update.effective_user.id)
-        mid      = client.get_mid_price(coin)
+        client        = _get_client(tg_id)
+        mid           = client.get_mid_price(coin)
         display_price = limit_price if limit_price else mid
-        notional = display_price * size
-        margin   = notional / leverage
-        price_label = f"${limit_price:,.2f} (limit)" if limit_price else f"~${mid:,.2f} (market)"
+        notional      = display_price * size
+        margin        = notional / leverage
+        price_label   = f"${limit_price:,.2f} (limit)" if limit_price else f"~${mid:,.2f} (market)"
         extras = ""
         if tp:
             extras += f"\n   Take-profit: ${tp:,.2f}"
@@ -1696,18 +1714,19 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"   Notional:  ~${notional:,.2f}\n"
             f"   Leverage:  {leverage}x\n"
             f"   Margin:    ~${margin:,.2f}"
-            f"{extras}\n\n"
-            f"Send /confirm to execute or /dismiss to cancel.\n"
-            f"Expires in {CONFIRM_TTL}s."
+            f"{extras}"
         )
-        _store_pending(
-            update.effective_user.id, preview,
-            lambda: client.open_position(
-                coin=coin, is_buy=is_buy, size=size,
-                leverage=leverage, limit_px=limit_price, tp=tp, sl=sl,
-            ),
+        fn = lambda: client.open_position(
+            coin=coin, is_buy=is_buy, size=size,
+            leverage=leverage, limit_px=limit_price, tp=tp, sl=sl,
         )
-        await update.message.reply_text(preview)
+        if pre_confirmed:
+            await update.message.reply_text(f"Executing…\n\n{preview}")
+            fn()
+            await update.message.reply_text(f"✅ {'Long' if is_buy else 'Short'} {size} {coin} order submitted.")
+        else:
+            _store_pending(tg_id, preview + f"\n\nSend /confirm to execute or /dismiss to cancel.\nExpires in {CONFIRM_TTL}s.", fn)
+            await update.message.reply_text(preview + f"\n\nSend /confirm to execute or /dismiss to cancel.\nExpires in {CONFIRM_TTL}s.")
     except Exception as e:
         await update.message.reply_text(f"Error processing form: {e}")
 
