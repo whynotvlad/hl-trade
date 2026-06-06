@@ -5,7 +5,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update, WebAppInfo
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 import db
 from client import HLClient
@@ -24,14 +24,15 @@ ADMIN_IDS = {
 }
 
 _clients: dict[tuple, HLClient] = {}
-_pending: dict[int, dict] = {}       # tg_id -> {fn, preview, expires}
-_snapshots: dict[int, dict] = {}     # tg_id -> {order_ids, orders, positions}
-_liq_warned: dict[str, bool] = {}    # "{tg_id}_{coin}" -> True when warning already sent
+_pending: dict[int, dict] = {}            # tg_id -> {fn, preview, expires}
+_snapshots: dict[int, dict] = {}          # tg_id -> {order_ids, orders, positions}
+_liq_warned: dict[str, bool] = {}         # "{tg_id}_{coin}" -> True when warning already sent
+_awaiting_partial: dict[int, str] = {}    # tg_id -> coin, waiting for partial close size input
 
 CONFIRM_TTL = 60
 POLL_INTERVAL = 30
 LIQ_WARN_PCT = 15
-WEB_APP_URL = "https://whynotvlad.github.io/hl-trade/open.html?v=5"
+WEB_APP_URL = "https://whynotvlad.github.io/hl-trade/open.html?v=6"
 
 QUICK_KEYS = ReplyKeyboardMarkup(
     [["/positions", "/orders"], ["/pnl", "/price BTC"]],
@@ -405,6 +406,28 @@ async def cmd_dismiss(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Nothing to dismiss.")
 
 
+def _position_text(pos: dict, prices: dict) -> str:
+    size = float(pos["szi"])
+    is_long = size > 0
+    side = "LONG" if is_long else "SHORT"
+    pnl = float(pos.get("unrealizedPnl", 0))
+    pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+    mark = prices.get(pos["coin"])
+    mark_str = f"${float(mark):,.2f}" if mark else "—"
+    lev = pos.get("leverage", {})
+    liq = pos.get("liquidationPx")
+    liq_line = f"\n   Liq:      ${float(liq):,.2f} ⚠️" if liq else ""
+    return (
+        f"{'🟢' if is_long else '🔴'} {pos['coin']} {side}\n"
+        f"   Size:     {abs(size)}\n"
+        f"   Entry:    ${float(pos['entryPx']):,.2f}\n"
+        f"   Mark:     {mark_str}\n"
+        f"   PnL:      {pnl_str} {'📈' if pnl >= 0 else '📉'}\n"
+        f"   Leverage: {lev.get('value')}x {lev.get('type')}"
+        f"{liq_line}"
+    )
+
+
 async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
@@ -413,7 +436,141 @@ async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state = client.get_positions()
         prices = client.get_prices()
         spot = client.get_spot_usdc()
-        await update.message.reply_text(_fmt_positions(state, prices, spot))
+
+        open_positions = [
+            e for e in state.get("assetPositions", [])
+            if float(e["position"]["szi"]) != 0
+        ]
+
+        if not open_positions:
+            summary = state.get("marginSummary", {})
+            perp = float(summary.get("accountValue", 0))
+            await update.message.reply_text(
+                f"No open positions.\n\n"
+                f"💰 Balance\n"
+                f"   Perp: ${perp:,.2f}\n"
+                f"   Spot: ${spot:,.2f}"
+            )
+            return
+
+        for e in open_positions:
+            pos = e["position"]
+            coin = pos["coin"]
+            await update.message.reply_text(
+                _position_text(pos, prices),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Close Full",    callback_data=f"close_full:{coin}"),
+                    InlineKeyboardButton("✂️ Close Partial", callback_data=f"close_partial:{coin}"),
+                ]]),
+            )
+
+        summary = state.get("marginSummary", {})
+        perp = float(summary.get("accountValue", 0))
+        await update.message.reply_text(
+            f"💰 Balance\n"
+            f"   Perp: ${perp:,.2f}\n"
+            f"   Spot: ${spot:,.2f}"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+
+async def handle_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    tg_id = query.from_user.id
+    if not _is_allowed(tg_id):
+        return
+    action, coin = query.data.split(":", 1)
+    try:
+        client = _get_client(tg_id)
+        pos = client._find_position(coin)
+        if not pos:
+            await query.edit_message_text(f"No open {coin} position.")
+            return
+
+        pos_size = float(pos["szi"])
+        is_long = pos_size > 0
+        price = client.get_mid_price(coin)
+
+        if action == "close_full":
+            close_size = abs(pos_size)
+            pnl = (price - float(pos["entryPx"])) * close_size * (1 if is_long else -1)
+            pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+            preview = (
+                f"Order Preview\n\n"
+                f"{'🟢' if is_long else '🔴'} Close {coin} {'LONG' if is_long else 'SHORT'}\n"
+                f"   Size:    {close_size} (full)\n"
+                f"   Price:   ~${price:,.2f}\n"
+                f"   Est PnL: {pnl_str} {'📈' if pnl >= 0 else '📉'}\n\n"
+                f"Send /confirm to execute or /dismiss to cancel.\n"
+                f"Expires in {CONFIRM_TTL}s."
+            )
+            _store_pending(
+                tg_id, preview,
+                lambda c=coin: client.close_position(coin=c, size=None),
+            )
+            await context.bot.send_message(chat_id=tg_id, text=preview)
+
+        elif action == "close_partial":
+            _awaiting_partial[tg_id] = coin
+            await context.bot.send_message(
+                chat_id=tg_id,
+                text=(
+                    f"How much {coin} to close?\n"
+                    f"Max: {abs(pos_size)} {coin}\n\n"
+                    f"Type the amount:"
+                ),
+            )
+    except Exception as e:
+        await context.bot.send_message(chat_id=tg_id, text=f"Error: {e}")
+
+
+async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tg_id = update.effective_user.id
+    if not _is_allowed(tg_id):
+        return
+    coin = _awaiting_partial.pop(tg_id, None)
+    if not coin:
+        return  # not waiting for anything — ignore plain text
+    try:
+        size = float(update.message.text.strip())
+        if size <= 0:
+            await update.message.reply_text("Size must be greater than 0. Try again: /positions")
+            return
+        client = _get_client(tg_id)
+        pos = client._find_position(coin)
+        if not pos:
+            await update.message.reply_text(f"No open position for {coin}.")
+            return
+        pos_size = float(pos["szi"])
+        max_size = abs(pos_size)
+        if size > max_size:
+            await update.message.reply_text(
+                f"Size {size} exceeds position size {max_size}.\n"
+                f"Try again: /positions"
+            )
+            return
+        is_long = pos_size > 0
+        price = client.get_mid_price(coin)
+        pnl = (price - float(pos["entryPx"])) * size * (1 if is_long else -1)
+        pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+        preview = (
+            f"Order Preview\n\n"
+            f"{'🟢' if is_long else '🔴'} Close {coin} {'LONG' if is_long else 'SHORT'}\n"
+            f"   Size:    {size} (partial)\n"
+            f"   Price:   ~${price:,.2f}\n"
+            f"   Est PnL: {pnl_str} {'📈' if pnl >= 0 else '📉'}\n\n"
+            f"Send /confirm to execute or /dismiss to cancel.\n"
+            f"Expires in {CONFIRM_TTL}s."
+        )
+        _store_pending(
+            tg_id, preview,
+            lambda c=coin, s=size: client.close_position(coin=c, size=s),
+        )
+        await update.message.reply_text(preview)
+    except ValueError:
+        await update.message.reply_text("Please enter a valid number, e.g. 0.0005")
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
@@ -1132,6 +1289,8 @@ def main():
 
     app.job_queue.run_repeating(_poll_notifications, interval=POLL_INTERVAL, first=15)
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
+    app.add_handler(CallbackQueryHandler(handle_close_callback, pattern="^close_"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     # Must be last — catches any /command not matched above
     app.add_handler(MessageHandler(filters.COMMAND, cmd_unknown))
 
