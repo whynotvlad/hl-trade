@@ -97,18 +97,26 @@ def sl_cmd(
 @app.command("cancel")
 def cancel_cmd(
     coin: str = typer.Option(..., "--coin", "-c", help="Asset symbol"),
-    type_: str = typer.Option(..., "--type", "-t", help="Order type to cancel: 'tp' or 'sl'"),
+    type_: Optional[str] = typer.Option(None, "--type", "-t", help="'tp' or 'sl' — cancels all matching orders"),
+    oid: Optional[int] = typer.Option(None, "--id", help="Cancel a specific order by ID (from `orders`)"),
 ):
-    """Cancel existing TP or SL orders for a coin."""
-    if type_.lower() not in ("tp", "sl"):
-        typer.echo("--type must be 'tp' or 'sl'", err=True)
+    """Cancel orders: by type (--type tp/sl) or by specific order ID (--id)."""
+    if not type_ and not oid:
+        typer.echo("Provide --type (tp/sl) or --id <order_id>", err=True)
         raise typer.Exit(1)
     try:
-        results = get_client().cancel_tpsl(coin=coin.upper(), tpsl_type=type_.lower())
-        if not results:
-            typer.echo(f"No {type_.upper()} orders found for {coin.upper()}.")
-        for r in results:
-            display.show_result(r)
+        if oid:
+            result = get_client().cancel_by_id(coin=coin.upper(), oid=oid)
+            display.show_result(result)
+        else:
+            if type_.lower() not in ("tp", "sl"):
+                typer.echo("--type must be 'tp' or 'sl'", err=True)
+                raise typer.Exit(1)
+            results = get_client().cancel_tpsl(coin=coin.upper(), tpsl_type=type_.lower())
+            if not results:
+                typer.echo(f"No {type_.upper()} orders found for {coin.upper()}.")
+            for r in results:
+                display.show_result(r)
     except Exception as e:
         handle_error(e)
 

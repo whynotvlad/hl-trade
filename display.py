@@ -110,15 +110,22 @@ def show_result(result: dict):
         console.print(f"[red]Exchange error:[/red] {result}")
         return
 
+    response_type = result.get("response", {}).get("type")
     statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+
     for s in statuses:
-        if "filled" in s:
-            f = s["filled"]
-            console.print(
-                f"[green]✓ Filled[/green]  avg ${float(f.get('avgPx', 0)):,.4f}"
-                f"  size {f.get('totalSz', '?')}"
-            )
-        elif "resting" in s:
-            console.print(f"[yellow]⟳ Resting[/yellow]  order ID: {s['resting'].get('oid')}")
-        elif "error" in s:
-            console.print(f"[red]✗ Order error:[/red] {s['error']}")
+        if response_type == "cancel" or s == "success":
+            console.print("[green]✓ Cancelled[/green]")
+        elif isinstance(s, dict):
+            if "filled" in s:
+                f = s["filled"]
+                console.print(
+                    f"[green]✓ Filled[/green]  avg ${float(f.get('avgPx', 0)):,.4f}"
+                    f"  size {f.get('totalSz', '?')}"
+                )
+            elif "resting" in s:
+                console.print(f"[yellow]⟳ Resting[/yellow]  order ID: {s['resting'].get('oid')}")
+            elif "error" in s:
+                console.print(f"[red]✗ Order error:[/red] {s['error']}")
+        else:
+            console.print(f"[red]✗ Error:[/red] {s}")

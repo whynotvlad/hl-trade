@@ -181,6 +181,9 @@ class HLClient:
         order_type = {"trigger": {"triggerPx": trigger_price, "isMarket": True, "tpsl": "sl"}}
         return self.exchange.order(coin, is_buy, size, trigger_price, order_type, reduce_only=True)
 
+    def cancel_by_id(self, coin: str, oid: int) -> dict:
+        return self.exchange.cancel(coin, oid)
+
     def cancel_tpsl(self, coin: str, tpsl_type: str) -> list:
         """Cancel all TP or SL orders for a given coin. tpsl_type: 'tp' or 'sl'."""
         type_label = "Take Profit Market" if tpsl_type == "tp" else "Stop Market"
