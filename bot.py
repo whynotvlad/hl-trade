@@ -60,9 +60,9 @@ LADDER_FORM_URL = "https://whynotvlad.github.io/hl-trade/ladder.html?v=2"
 
 QUICK_KEYS = ReplyKeyboardMarkup(
     [
-        ["/positions", "/orders"],
-        ["/pnl",       "/risk"],
-        ["/chart",     "/price BTC"],
+        ["/book",  "/stats"],
+        ["/pnl",   "/risk"],
+        ["/chart", "/price BTC"],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -131,7 +131,7 @@ _HELP: dict[str, str] = {
         "  /cancel BTC tp          — cancel all BTC take-profit orders\n"
         "  /cancel BTC sl          — cancel all BTC stop-loss orders\n"
         "  /cancel BTC 54479543383 — cancel specific order by ID\n\n"
-        "Get order IDs from /orders."
+        "Get order IDs from /book."
     ),
     "alert": (
         "Set a price alert for any coin.\n\n"
@@ -168,7 +168,7 @@ _HELP: dict[str, str] = {
         "Use prices on the loss side of current market:\n"
         "  LONG  → prices below current price\n"
         "  SHORT → prices above current price\n\n"
-        "Orders appear in /orders as stop triggers."
+        "Orders appear in /book as stop triggers."
     ),
     "pnl": (
         "Show realised PnL for the last 7 days.\n\n"
@@ -244,7 +244,7 @@ def _fmt_result(result) -> str:
         failed = len(result) - ok
         msg = f"Ladder: placed {ok}/{len(result)} orders."
         if failed:
-            msg += f"\n{failed} failed — check /orders for what went through."
+            msg += f"\n{failed} failed — check /book for what went through."
         return msg
     if result.get("status") != "ok":
         return f"Error: {result}"
