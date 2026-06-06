@@ -310,46 +310,36 @@
       el.innerHTML = `<b>${dir} ${size} ${coin}</b>${priceLabel} <b>${leverage}x</b>`;
     }
 
-    function showErr(msg) {
-      tg.showAlert(msg);
-    }
-
-    function validate() {
-      const coin = document.getElementById('coin').value.trim();
-      const size = parseFloat(document.getElementById('size').value);
-
-      if (!coin) { showErr('Enter a coin symbol, e.g. BTC'); return false; }
-      if (!size || size <= 0) { showErr('Enter a size greater than 0, e.g. 0.001'); return false; }
-      if (!leverage || leverage < 1 || leverage > 50) { showErr('Leverage must be between 1 and 50'); return false; }
-
-      const lp = parseFloat(document.getElementById('limit-price').value);
-      if (orderType === 'limit' && (!lp || lp <= 0)) { showErr('Enter a limit price'); return false; }
-
-      const tp = parseFloat(document.getElementById('tp').value) || null;
-      const sl = parseFloat(document.getElementById('sl').value) || null;
-      if (tp && sl) {
-        if (side === 'long'  && tp <= sl) { showErr('For Long: TP must be above SL'); return false; }
-        if (side === 'short' && tp >= sl) { showErr('For Short: TP must be below SL'); return false; }
-      }
-      return true;
+    function err(msg) {
+      try { tg.showAlert(msg); } catch(_) { alert(msg); }
     }
 
     function submit() {
-      if (!validate()) return;
-      const payload = {
-        coin:        document.getElementById('coin').value.trim().toUpperCase(),
-        side:        side,
-        size:        document.getElementById('size').value.trim(),
-        leverage:    String(leverage),
-        order_type:  orderType,
-        limit_price: document.getElementById('limit-price').value.trim() || '',
-        tp:          document.getElementById('tp').value.trim() || '',
-        sl:          document.getElementById('sl').value.trim() || '',
-      };
       try {
-        tg.sendData(JSON.stringify(payload));
+        const coin = document.getElementById('coin').value.trim().toUpperCase();
+        const size = parseFloat(document.getElementById('size').value);
+        const lp   = parseFloat(document.getElementById('limit-price').value) || null;
+        const tp   = parseFloat(document.getElementById('tp').value) || null;
+        const sl   = parseFloat(document.getElementById('sl').value) || null;
+
+        if (!coin)              { err('Enter a coin, e.g. BTC'); return; }
+        if (!size || size <= 0) { err('Enter a size, e.g. 0.001'); return; }
+        if (leverage < 1 || leverage > 50) { err('Leverage must be 1–50'); return; }
+        if (orderType === 'limit' && !lp)  { err('Enter a limit price'); return; }
+        if (tp && sl && side === 'long'  && tp <= sl) { err('Long: TP must be above SL'); return; }
+        if (tp && sl && side === 'short' && tp >= sl) { err('Short: TP must be below SL'); return; }
+
+        tg.sendData(JSON.stringify({
+          coin, side,
+          size:        String(size),
+          leverage:    String(leverage),
+          order_type:  orderType,
+          limit_price: lp ? String(lp) : '',
+          tp:          tp ? String(tp) : '',
+          sl:          sl ? String(sl) : '',
+        }));
       } catch(e) {
-        tg.showAlert('Send failed: ' + e.message);
+        alert('Error: ' + e.message);
       }
     }
 
