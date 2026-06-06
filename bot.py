@@ -385,6 +385,15 @@ async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         result = entry["fn"]()
         await update.message.reply_text(_fmt_result(result))
+        # Show updated positions and orders after every confirmed trade
+        client = _get_client(update.effective_user.id)
+        state  = client.get_positions()
+        prices = client.get_prices()
+        spot   = client.get_spot_usdc()
+        await update.message.reply_text(_fmt_positions(state, prices, spot))
+        orders = client.get_open_orders()
+        if orders:
+            await update.message.reply_text(_fmt_orders(orders))
     except Exception as e:
         await update.message.reply_text(f"Order failed: {e}")
 
@@ -904,19 +913,22 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
     import json
     try:
         data = json.loads(update.message.web_app_data.data)
-        coin     = data["coin"].upper()
-        side     = data["side"]
-        size     = float(data["size"])
-        leverage = int(data["leverage"])
-        tp       = float(data["tp"]) if data.get("tp") else None
-        sl       = float(data["sl"]) if data.get("sl") else None
-        is_buy   = side == "long"
+        coin        = data["coin"].upper()
+        side        = data["side"]
+        size        = float(data["size"])
+        leverage    = int(data["leverage"])
+        tp          = float(data["tp"]) if data.get("tp") else None
+        sl          = float(data["sl"]) if data.get("sl") else None
+        limit_price = float(data["limit_price"]) if data.get("limit_price") else None
+        is_buy      = side == "long"
 
-        client = _get_client(update.effective_user.id)
-        price    = client.get_mid_price(coin)
-        notional = price * size
+        client   = _get_client(update.effective_user.id)
+        mid      = client.get_mid_price(coin)
+        display_price = limit_price if limit_price else mid
+        notional = display_price * size
         margin   = notional / leverage
-        extras   = ""
+        price_label = f"${limit_price:,.2f} (limit)" if limit_price else f"~${mid:,.2f} (market)"
+        extras = ""
         if tp:
             extras += f"\n   Take-profit: ${tp:,.2f}"
         if sl:
@@ -926,7 +938,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"Order Preview\n\n"
             f"{'🟢' if is_buy else '🔴'} {coin} {'LONG' if is_buy else 'SHORT'}\n"
             f"   Size:      {size} {coin}\n"
-            f"   Price:     ~${price:,.2f}\n"
+            f"   Price:     {price_label}\n"
             f"   Notional:  ~${notional:,.2f}\n"
             f"   Leverage:  {leverage}x\n"
             f"   Margin:    ~${margin:,.2f}"
@@ -938,7 +950,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             update.effective_user.id, preview,
             lambda: client.open_position(
                 coin=coin, is_buy=is_buy, size=size,
-                leverage=leverage, tp=tp, sl=sl,
+                leverage=leverage, limit_px=limit_price, tp=tp, sl=sl,
             ),
         )
         await update.message.reply_text(preview)

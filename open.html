@@ -110,6 +110,22 @@
       text-align: center;
     }
 
+    /* Order type toggle */
+    .order-type-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .ot-btn {
+      padding: 11px;
+      border: 2px solid var(--bg2);
+      border-radius: var(--radius);
+      background: var(--bg2);
+      color: var(--hint);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .ot-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(37,99,235,.12); }
+    .limit-row { margin-top: 10px; }
+
     /* Collapsible TP/SL */
     .tpsl-toggle {
       display: flex;
@@ -192,6 +208,18 @@
   </div>
 
   <div class="section">
+    <div class="label">Order Type</div>
+    <div class="order-type-row">
+      <button class="ot-btn active" id="btn-market" onclick="setOrderType('market')">Market</button>
+      <button class="ot-btn" id="btn-limit" onclick="setOrderType('limit')">Limit</button>
+    </div>
+    <div class="limit-row" id="limit-row" style="display:none">
+      <input type="number" id="limit-price" placeholder="Limit price $" step="any" min="0"
+             oninput="updateSummary()" style="margin-top:10px" />
+    </div>
+  </div>
+
+  <div class="section">
     <div class="tpsl-toggle" id="tpsl-toggle" onclick="toggleTpSl()">
       <span>Take Profit / Stop Loss</span>
       <span class="arrow">▾</span>
@@ -221,6 +249,7 @@
 
     let side = 'long';
     let leverage = 5;
+    let orderType = 'market';
 
     function setSide(s) {
       side = s;
@@ -244,6 +273,14 @@
       document.querySelectorAll('.chip:not(.chip-custom)').forEach(c => c.classList.remove('active'));
     }
 
+    function setOrderType(t) {
+      orderType = t;
+      document.getElementById('btn-market').classList.toggle('active', t === 'market');
+      document.getElementById('btn-limit').classList.toggle('active',  t === 'limit');
+      document.getElementById('limit-row').style.display = t === 'limit' ? 'block' : 'none';
+      updateSummary();
+    }
+
     function toggleTpSl() {
       const body = document.getElementById('tpsl-body');
       const toggle = document.getElementById('tpsl-toggle');
@@ -261,7 +298,9 @@
         return;
       }
       const dir = side === 'long' ? '🟢 Long' : '🔴 Short';
-      el.innerHTML = `<b>${dir} ${size} ${coin}</b> at <b>${leverage}x</b> leverage`;
+      const lp  = parseFloat(document.getElementById('limit-price').value);
+      const priceLabel = orderType === 'limit' && lp ? ` @ $${lp.toLocaleString()}` : ' @ market';
+      el.innerHTML = `<b>${dir} ${size} ${coin}</b>${priceLabel} <b>${leverage}x</b>`;
     }
 
     function validate() {
@@ -273,6 +312,8 @@
       if (!coin) { show(err, 'Enter a coin symbol.'); return false; }
       if (!size || size <= 0) { show(err, 'Enter a valid size greater than 0.'); return false; }
       if (!lev  || lev  < 1 || lev > 50) { show(err, 'Leverage must be between 1 and 50.'); return false; }
+      const lp = parseFloat(document.getElementById('limit-price').value);
+      if (orderType === 'limit' && (!lp || lp <= 0)) { show(err, 'Enter a limit price.'); return false; }
 
       const tp = parseFloat(document.getElementById('tp').value) || null;
       const sl = parseFloat(document.getElementById('sl').value) || null;
@@ -292,12 +333,14 @@
     tg.MainButton.onClick(() => {
       if (!validate()) return;
       const payload = {
-        coin:     document.getElementById('coin').value.trim().toUpperCase(),
-        side:     side,
-        size:     document.getElementById('size').value.trim(),
-        leverage: String(leverage),
-        tp:       document.getElementById('tp').value.trim() || '',
-        sl:       document.getElementById('sl').value.trim() || '',
+        coin:        document.getElementById('coin').value.trim().toUpperCase(),
+        side:        side,
+        size:        document.getElementById('size').value.trim(),
+        leverage:    String(leverage),
+        order_type:  orderType,
+        limit_price: document.getElementById('limit-price').value.trim() || '',
+        tp:          document.getElementById('tp').value.trim() || '',
+        sl:          document.getElementById('sl').value.trim() || '',
       };
       tg.sendData(JSON.stringify(payload));
     });
