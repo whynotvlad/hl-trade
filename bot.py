@@ -4,7 +4,7 @@ import time
 from typing import Optional
 
 from dotenv import load_dotenv
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update, WebAppInfo
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 import db
@@ -426,13 +426,12 @@ async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if len(args) < 4:
         await update.message.reply_text(
-            "Tap to open the trade form:",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    "Open Trade Form",
-                    web_app=WebAppInfo(url=WEB_APP_URL),
-                )
-            ]]),
+            "Tap the button below to open the trade form:",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("Open Trade Form", web_app=WebAppInfo(url=WEB_APP_URL))]],
+                resize_keyboard=True,
+                one_time_keyboard=True,
+            ),
         )
         return
     try:
