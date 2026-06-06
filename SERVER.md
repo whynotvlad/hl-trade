@@ -8,29 +8,29 @@ How the bot runs in production on the Ubuntu VPS.
 
 | Component | Where |
 |---|---|
-| **Bot process** | Ubuntu VPS — runs as a `systemd` service |
+| **Bot process** | `root@204.168.205.162` — runs as a `systemd` service (`hl-bot`) |
 | **HTML forms** | GitHub Pages — `https://whynotvlad.github.io/hl-trade/` |
 | **Code repo** | `https://github.com/whynotvlad/hl-trade` |
-| **Database** | `/home/ubuntu/hl-trade/users.db` (SQLite, encrypted fields) |
+| **Database** | `/root/hl-trade/users.db` (SQLite, encrypted fields) |
 
 ---
 
 ## SSH Access
 
 ```bash
-ssh ubuntu@<server-ip>
-# or if you use a key alias in ~/.ssh/config:
-ssh hl-trade
+ssh root@204.168.205.162
 ```
 
-Recommended `~/.ssh/config` entry (add to your local machine):
+Optional `~/.ssh/config` alias (add to your local machine for convenience):
 
 ```
 Host hl-trade
-    HostName <server-ip>
-    User ubuntu
+    HostName 204.168.205.162
+    User root
     IdentityFile ~/.ssh/id_ed25519
 ```
+
+Then just: `ssh hl-trade`
 
 ---
 
@@ -40,7 +40,7 @@ Run these once after provisioning a fresh Ubuntu 22.04 instance:
 
 ```bash
 # Update and install Python
-sudo apt update && sudo apt install -y python3 python3-venv python3-pip git
+apt update && apt install -y python3 python3-venv python3-pip git
 
 # Clone the repo
 cd ~
@@ -61,13 +61,7 @@ nano .env   # fill in TELEGRAM_TOKEN, PRIVATE_KEY, ACCOUNT_ADDRESS, NETWORK, etc
 
 ## systemd Service
 
-Create the service file on the server:
-
-```bash
-sudo nano /etc/systemd/system/hl-bot.service
-```
-
-Paste:
+The service file is already installed on the server at `/etc/systemd/system/hl-bot.service` and enabled at boot. Contents:
 
 ```ini
 [Unit]
@@ -75,10 +69,10 @@ Description=HL Trade Telegram Bot
 After=network.target
 
 [Service]
-User=ubuntu
-WorkingDirectory=/home/ubuntu/hl-trade
-EnvironmentFile=/home/ubuntu/hl-trade/.env
-ExecStart=/home/ubuntu/hl-trade/.venv/bin/python bot.py
+User=root
+WorkingDirectory=/root/hl-trade
+EnvironmentFile=/root/hl-trade/.env
+ExecStart=/root/hl-trade/.venv/bin/python bot.py
 Restart=on-failure
 RestartSec=10
 
@@ -86,22 +80,14 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-Enable and start:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable hl-bot
-sudo systemctl start hl-bot
-```
-
 ### Useful service commands
 
 ```bash
-sudo systemctl status hl-bot        # current state
-sudo systemctl restart hl-bot       # restart after code changes
-sudo systemctl stop hl-bot          # stop
-sudo journalctl -u hl-bot -f        # stream live logs
-sudo journalctl -u hl-bot -n 100    # last 100 log lines
+systemctl status hl-bot        # current state
+systemctl restart hl-bot       # restart after code changes
+systemctl stop hl-bot          # stop
+journalctl -u hl-bot -f        # stream live logs
+journalctl -u hl-bot -n 100    # last 100 log lines
 ```
 
 ---
@@ -121,7 +107,7 @@ sudo journalctl -u hl-bot -f        # verify it started cleanly
 One-liner (run from your local machine):
 
 ```bash
-ssh hl-trade "cd hl-trade && git pull && sudo systemctl restart hl-bot"
+ssh root@204.168.205.162 "cd hl-trade && git pull && systemctl restart hl-bot"
 ```
 
 ---
@@ -181,7 +167,7 @@ The file is excluded from git (`.gitignore`). Back it up separately if needed:
 
 ```bash
 # From local machine
-scp hl-trade:/home/ubuntu/hl-trade/users.db ./users.db.bak
+scp root@204.168.205.162:/root/hl-trade/users.db ./users.db.bak
 ```
 
 ---
