@@ -27,7 +27,8 @@ _clients: dict[tuple, HLClient] = {}
 _pending: dict[int, dict] = {}            # tg_id -> {fn, preview, expires}
 _snapshots: dict[int, dict] = {}          # tg_id -> {order_ids, orders, positions}
 _liq_warned: dict[str, bool] = {}         # "{tg_id}_{coin}" -> True when warning already sent
-_awaiting_partial: dict[int, str] = {}    # tg_id -> coin, waiting for partial close size input
+_awaiting_partial: dict[int, str] = {}              # tg_id -> coin, waiting for partial close size
+_awaiting_price: dict[int, tuple[str, str]] = {}    # tg_id -> (action, coin), waiting for TP/SL price
 
 CONFIRM_TTL = 60
 POLL_INTERVAL = 30
@@ -458,10 +459,16 @@ async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             coin = pos["coin"]
             await update.message.reply_text(
                 _position_text(pos, prices),
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("❌ Close Full",    callback_data=f"close_full:{coin}"),
-                    InlineKeyboardButton("✂️ Close Partial", callback_data=f"close_partial:{coin}"),
-                ]]),
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("❌ Close Full",    callback_data=f"close_full:{coin}"),
+                        InlineKeyboardButton("✂️ Close Partial", callback_data=f"close_partial:{coin}"),
+                    ],
+                    [
+                        InlineKeyboardButton("🎯 Set TP", callback_data=f"set_tp:{coin}"),
+                        InlineKeyboardButton("🛑 Set SL", callback_data=f"set_sl:{coin}"),
+                    ],
+                ]),
             )
 
         summary = state.get("marginSummary", {})
@@ -522,6 +529,33 @@ async def handle_close_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     f"Type the amount:"
                 ),
             )
+
+        elif action == "set_tp":
+            _awaiting_price[tg_id] = ("tp", coin)
+            direction = "above" if is_long else "below"
+            await context.bot.send_message(
+                chat_id=tg_id,
+                text=(
+                    f"Set Take Profit for {coin} {'LONG' if is_long else 'SHORT'}\n"
+                    f"Current price: ~${price:,.2f}\n"
+                    f"TP should be {direction} current price.\n\n"
+                    f"Type the TP price $:"
+                ),
+            )
+
+        elif action == "set_sl":
+            _awaiting_price[tg_id] = ("sl", coin)
+            direction = "below" if is_long else "above"
+            await context.bot.send_message(
+                chat_id=tg_id,
+                text=(
+                    f"Set Stop Loss for {coin} {'LONG' if is_long else 'SHORT'}\n"
+                    f"Current price: ~${price:,.2f}\n"
+                    f"SL should be {direction} current price.\n\n"
+                    f"Type the SL price $:"
+                ),
+            )
+
     except Exception as e:
         await context.bot.send_message(chat_id=tg_id, text=f"Error: {e}")
 
@@ -530,6 +564,45 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_id = update.effective_user.id
     if not _is_allowed(tg_id):
         return
+
+    # TP/SL price input takes priority
+    price_action = _awaiting_price.pop(tg_id, None)
+    if price_action:
+        action, coin = price_action
+        try:
+            trigger_px = float(update.message.text.strip())
+            if trigger_px <= 0:
+                await update.message.reply_text("Price must be greater than 0. Try again: /positions")
+                return
+            client = _get_client(tg_id)
+            pos = client._find_position(coin)
+            if not pos:
+                await update.message.reply_text(f"No open {coin} position.")
+                return
+            is_long = float(pos["szi"]) > 0
+            label = "Take Profit" if action == "tp" else "Stop Loss"
+            emoji = "🎯" if action == "tp" else "🛑"
+            preview = (
+                f"Order Preview\n\n"
+                f"{emoji} {label} for {coin} {'LONG' if is_long else 'SHORT'}\n"
+                f"   Trigger: ${trigger_px:,.2f}\n\n"
+                f"Send /confirm to place or /dismiss to cancel.\n"
+                f"Expires in {CONFIRM_TTL}s."
+            )
+            fn = (
+                (lambda c=coin, p=trigger_px: client.set_tp(c, p))
+                if action == "tp"
+                else (lambda c=coin, p=trigger_px: client.set_sl(c, p))
+            )
+            _store_pending(tg_id, preview, fn)
+            await update.message.reply_text(preview)
+        except ValueError:
+            await update.message.reply_text("Please enter a valid price, e.g. 65000")
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
+        return
+
+    # Partial close size input
     coin = _awaiting_partial.pop(tg_id, None)
     if not coin:
         return  # not waiting for anything — ignore plain text
