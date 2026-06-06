@@ -1,3 +1,4 @@
+import datetime
 import logging
 import os
 import time
@@ -33,6 +34,7 @@ _awaiting_price: dict[int, tuple[str, str]] = {}    # tg_id -> (action, coin), w
 CONFIRM_TTL = 60
 POLL_INTERVAL = 30
 LIQ_WARN_PCT = 15
+DIGEST_TIME = datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc)  # midnight UTC
 WEB_APP_URL    = "https://whynotvlad.github.io/hl-trade/open.html?v=7"
 LADDER_FORM_URL = "https://whynotvlad.github.io/hl-trade/ladder.html?v=1"
 
@@ -1613,6 +1615,84 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"Error processing form: {e}")
 
 
+def _build_digest(fills: list, positions: list) -> Optional[str]:
+    """Build digest text from today's fills and current positions. Returns None if nothing to report."""
+    now_ms = time.time() * 1000
+    day_ms = 24 * 3600 * 1000
+    day_fills = [f for f in fills if now_ms - float(f.get("time", 0)) < day_ms]
+
+    coin_pnl: dict[str, float] = {}
+    coin_trades: dict[str, int] = {}
+    for fill in day_fills:
+        coin = fill.get("coin", "?")
+        coin_pnl[coin] = coin_pnl.get(coin, 0.0) + float(fill.get("closedPnl", 0))
+        coin_trades[coin] = coin_trades.get(coin, 0) + 1
+
+    total_pnl    = sum(coin_pnl.values())
+    total_trades = sum(coin_trades.values())
+    unrealized   = sum(float(p.get("unrealizedPnl", 0)) for p in positions)
+    open_count   = len(positions)
+
+    if total_trades == 0 and open_count == 0:
+        return None
+
+    emoji = "🟢" if total_pnl >= 0 else "🔴"
+    sign  = "+" if total_pnl >= 0 else ""
+    lines = [f"📊 Daily PnL Digest\n"]
+
+    if total_trades > 0:
+        lines.append(f"{emoji} Realized today: {sign}${total_pnl:,.2f}")
+        lines.append(f"📝 Trades closed: {total_trades}")
+
+        if coin_pnl:
+            best  = max(coin_pnl, key=coin_pnl.get)
+            worst = min(coin_pnl, key=coin_pnl.get)
+            if coin_pnl[best] > 0:
+                lines.append(f"🏆 Best:  {best} +${coin_pnl[best]:,.2f}")
+            if coin_pnl[worst] < 0:
+                lines.append(f"💀 Worst: {worst} −${abs(coin_pnl[worst]):,.2f}")
+    else:
+        lines.append("No closed trades today.")
+
+    if open_count > 0:
+        u_sign = "+" if unrealized >= 0 else ""
+        u_emoji = "📈" if unrealized >= 0 else "📉"
+        lines.append(f"\n{u_emoji} Unrealized: {u_sign}${unrealized:,.2f} ({open_count} open position{'s' if open_count != 1 else ''})")
+
+    return "\n".join(lines)
+
+
+async def _send_digest_to_user(bot, tg_id: int):
+    try:
+        client = _get_client(tg_id)
+        fills  = client.get_fills(days=1)
+        state  = client.get_positions()
+        positions = [
+            e["position"] for e in state.get("assetPositions", [])
+            if float(e["position"]["szi"]) != 0
+        ]
+        text = _build_digest(fills, positions)
+        if text:
+            await bot.send_message(chat_id=tg_id, text=text)
+    except Exception as e:
+        logging.warning(f"Daily digest failed for {tg_id}: {e}")
+
+
+async def _daily_digest(context: ContextTypes.DEFAULT_TYPE):
+    users = db.get_all_registered_users()
+    for user in users:
+        tg_id = user["tg_id"]
+        if _is_allowed(tg_id):
+            await _send_digest_to_user(context.bot, tg_id)
+
+
+async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    await update.message.reply_text("Fetching your digest…")
+    await _send_digest_to_user(context.bot, update.effective_user.id)
+
+
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update.effective_user.id):
         await update.message.reply_text("Admin only.")
@@ -1779,6 +1859,7 @@ async def _post_init(app: Application):
         BotCommand("confirm",     "Execute previewed order"),
         BotCommand("dismiss",     "Discard previewed order"),
         BotCommand("assets",      "List tradeable markets"),
+        BotCommand("digest",      "Today's PnL digest on demand"),
         BotCommand("help",        "Command help"),
         BotCommand("register",    "Link your Hyperliquid account"),
     ])
@@ -1817,11 +1898,13 @@ def main():
         ("adduser",     cmd_adduser),
         ("removeuser",  cmd_removeuser),
         ("listusers",   cmd_listusers),
+        ("digest",      cmd_digest),
         ("broadcast",   cmd_broadcast),
     ]:
         app.add_handler(CommandHandler(cmd, handler))
 
     app.job_queue.run_repeating(_poll_notifications, interval=POLL_INTERVAL, first=15)
+    app.job_queue.run_daily(_daily_digest, time=DIGEST_TIME)
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(CallbackQueryHandler(handle_close_callback, pattern="^(close_|set_tp:|set_sl:)"))
     app.add_handler(CallbackQueryHandler(handle_chart_callback, pattern="^chart_tf:"))
