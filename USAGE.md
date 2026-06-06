@@ -13,6 +13,25 @@ Add `--help` to any command to see all options:
 python main.py open --help
 ```
 
+### Switching networks
+
+The active network is set by `NETWORK` in `.env`. Override it for any single
+command with `--network`:
+
+```bash
+# Check testnet positions
+python main.py --network testnet positions
+
+# Open a position on mainnet
+python main.py --network mainnet open --coin BTC --side long --size 0.01 --leverage 5
+
+# Default (uses whatever NETWORK is set to in .env)
+python main.py positions
+```
+
+Set `NETWORK=mainnet` in `.env` once you are done testing to make mainnet the
+default without having to type `--network` every time.
+
 ---
 
 ## Commands at a glance

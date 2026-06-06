@@ -5,9 +5,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 PRIVATE_KEY = os.getenv("PRIVATE_KEY")
-NETWORK = os.getenv("NETWORK", "testnet")
-# Set only when PRIVATE_KEY belongs to an agent wallet rather than your main account.
-# Must be the 0x address of the master account that approved the agent.
 ACCOUNT_ADDRESS = os.getenv("ACCOUNT_ADDRESS")
 
 _BASE_URLS = {
@@ -16,10 +13,15 @@ _BASE_URLS = {
 }
 
 
+def get_network() -> str:
+    return os.getenv("NETWORK", "testnet")
+
+
 def get_base_url() -> str:
-    url = _BASE_URLS.get(NETWORK)
+    network = get_network()
+    url = _BASE_URLS.get(network)
     if not url:
-        print(f"Unknown NETWORK '{NETWORK}' in .env — must be 'mainnet' or 'testnet'")
+        print(f"Unknown NETWORK '{network}' — must be 'mainnet' or 'testnet'")
         sys.exit(1)
     return url
 

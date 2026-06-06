@@ -1,17 +1,36 @@
 from typing import Optional
+import os
 import typer
 from client import HLClient
+import config
 import display
 
 app = typer.Typer(help="Hyperliquid perpetuals trading CLI")
 
 _client: Optional[HLClient] = None
+_client_network: Optional[str] = None
+
+
+@app.callback()
+def main(
+    network: Optional[str] = typer.Option(
+        None, "--network", "-n",
+        help="Override network for this command: mainnet or testnet"
+    )
+):
+    if network:
+        if network not in ("mainnet", "testnet"):
+            typer.echo("--network must be 'mainnet' or 'testnet'", err=True)
+            raise typer.Exit(1)
+        os.environ["NETWORK"] = network
 
 
 def get_client() -> HLClient:
-    global _client
-    if _client is None:
+    global _client, _client_network
+    current = config.get_network()
+    if _client is None or _client_network != current:
         _client = HLClient()
+        _client_network = current
     return _client
 
 

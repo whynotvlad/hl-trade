@@ -120,13 +120,31 @@ https://app.hyperliquid-testnet.xyz/drip
 
 ## 6. Switch to mainnet
 
-When you are ready to trade with real funds, edit `.env`:
+### Approve the agent wallet on mainnet
+
+The agent wallet approval is per-network. If you approved it on testnet, you
+must also approve it on mainnet before trading with real funds:
+
+1. Go to [app.hyperliquid.xyz](https://app.hyperliquid.xyz) and log in
+2. **Settings → API → Add API Wallet**
+3. Paste the same agent wallet address you generated in Step 1
+4. Sign the transaction
+
+### Set mainnet as default
+
+Edit `.env`:
 
 ```env
 NETWORK=mainnet
 ```
 
-No other changes needed.
+Or keep `NETWORK=testnet` as the default and use `--network mainnet` on
+individual commands to trade on mainnet explicitly:
+
+```bash
+python main.py --network mainnet positions
+python main.py --network mainnet open --coin BTC --side long --size 0.01 --leverage 5
+```
 
 ---
 
