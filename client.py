@@ -7,6 +7,15 @@ import config
 MARKET_SLIPPAGE = 0.02  # 2% slippage used to simulate market orders via IOC limit
 
 
+def _round_price(px: float) -> float:
+    """Round to 5 significant figures — Hyperliquid's maximum for prices."""
+    from math import floor, log10
+    if px <= 0:
+        return px
+    magnitude = int(floor(log10(abs(px))))
+    return round(px, 4 - magnitude)
+
+
 class HLClient:
     def __init__(self):
         config.validate()
@@ -65,7 +74,8 @@ class HLClient:
     def _ioc_price(self, coin: str, is_buy: bool) -> float:
         mid = self.get_mid_price(coin)
         # IOC far enough from mid to fill immediately in normal conditions
-        return round(mid * (1 + MARKET_SLIPPAGE) if is_buy else mid * (1 - MARKET_SLIPPAGE), 6)
+        raw = mid * (1 + MARKET_SLIPPAGE) if is_buy else mid * (1 - MARKET_SLIPPAGE)
+        return _round_price(raw)
 
     # --- trading actions ---
 
@@ -86,7 +96,7 @@ class HLClient:
             price = self._ioc_price(coin, is_buy)
             order_type = {"limit": {"tif": "Ioc"}}
         else:
-            price = limit_px
+            price = _round_price(limit_px)
             order_type = {"limit": {"tif": "Gtc"}}
 
         result = self.exchange.order(coin, is_buy, size, price, order_type)
@@ -117,7 +127,7 @@ class HLClient:
             price = self._ioc_price(coin, is_buy)
             order_type = {"limit": {"tif": "Ioc"}}
         else:
-            price = limit_px
+            price = _round_price(limit_px)
             order_type = {"limit": {"tif": "Gtc"}}
 
         return self.exchange.order(coin, is_buy, close_size, price, order_type, reduce_only=True)
@@ -139,6 +149,7 @@ class HLClient:
                 size = abs(float(pos["szi"]))
 
         is_buy = not is_long  # TP for long = sell when price goes up
+        trigger_price = _round_price(trigger_price)
         order_type = {"trigger": {"triggerPx": trigger_price, "isMarket": True, "tpsl": "tp"}}
         return self.exchange.order(coin, is_buy, size, trigger_price, order_type, reduce_only=True)
 
@@ -159,6 +170,7 @@ class HLClient:
                 size = abs(float(pos["szi"]))
 
         is_buy = not is_long  # SL for long = sell when price drops
+        trigger_price = _round_price(trigger_price)
         order_type = {"trigger": {"triggerPx": trigger_price, "isMarket": True, "tpsl": "sl"}}
         return self.exchange.order(coin, is_buy, size, trigger_price, order_type, reduce_only=True)
 
