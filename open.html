@@ -310,33 +310,28 @@
       el.innerHTML = `<b>${dir} ${size} ${coin}</b>${priceLabel} <b>${leverage}x</b>`;
     }
 
+    function showErr(msg) {
+      tg.showAlert(msg);
+    }
+
     function validate() {
       const coin = document.getElementById('coin').value.trim();
       const size = parseFloat(document.getElementById('size').value);
-      const lev  = leverage;
-      const err  = document.getElementById('error');
 
-      if (!coin) { show(err, 'Enter a coin symbol.'); return false; }
-      if (!size || size <= 0) { show(err, 'Enter a valid size greater than 0.'); return false; }
-      if (!lev  || lev  < 1 || lev > 50) { show(err, 'Leverage must be between 1 and 50.'); return false; }
+      if (!coin) { showErr('Enter a coin symbol, e.g. BTC'); return false; }
+      if (!size || size <= 0) { showErr('Enter a size greater than 0, e.g. 0.001'); return false; }
+      if (!leverage || leverage < 1 || leverage > 50) { showErr('Leverage must be between 1 and 50'); return false; }
+
       const lp = parseFloat(document.getElementById('limit-price').value);
-      if (orderType === 'limit' && (!lp || lp <= 0)) { show(err, 'Enter a limit price.'); return false; }
+      if (orderType === 'limit' && (!lp || lp <= 0)) { showErr('Enter a limit price'); return false; }
 
       const tp = parseFloat(document.getElementById('tp').value) || null;
       const sl = parseFloat(document.getElementById('sl').value) || null;
       if (tp && sl) {
-        if (side === 'long'  && tp <= sl) { show(err, 'For a Long: TP must be above SL.'); return false; }
-        if (side === 'short' && tp >= sl) { show(err, 'For a Short: TP must be below SL.'); return false; }
+        if (side === 'long'  && tp <= sl) { showErr('For Long: TP must be above SL'); return false; }
+        if (side === 'short' && tp >= sl) { showErr('For Short: TP must be below SL'); return false; }
       }
-
-      err.classList.remove('show');
       return true;
-    }
-
-    function show(el, msg) {
-      el.textContent = msg;
-      el.classList.add('show');
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 
     function submit() {
@@ -354,7 +349,7 @@
       try {
         tg.sendData(JSON.stringify(payload));
       } catch(e) {
-        alert('Could not send order: ' + e.message);
+        tg.showAlert('Send failed: ' + e.message);
       }
     }
 
