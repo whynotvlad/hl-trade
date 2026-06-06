@@ -107,8 +107,11 @@ sudo journalctl -u hl-bot -f        # verify it started cleanly
 One-liner (run from your local machine):
 
 ```bash
-ssh root@204.168.205.162 "cd hl-trade && git pull && systemctl restart hl-bot"
+ssh root@204.168.205.162 "cd hl-trade && git pull && systemctl restart hl-bot && systemctl is-active hl-bot"
 ```
+
+> **Never use `pkill -f bot.py`** — the string "bot.py" appears in pkill's own
+> command line, causing it to kill the SSH session. Use `systemctl restart hl-bot` only.
 
 ---
 
