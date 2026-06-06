@@ -30,11 +30,16 @@ _snapshots: dict[int, dict] = {}          # tg_id -> {order_ids, orders, positio
 _liq_warned: dict[str, bool] = {}         # "{tg_id}_{coin}" -> True when warning already sent
 _awaiting_partial: dict[int, str] = {}              # tg_id -> coin, waiting for partial close size
 _awaiting_price: dict[int, tuple[str, str]] = {}    # tg_id -> (action, coin), waiting for TP/SL price
+_price_history: dict[str, list] = {}      # coin -> [(ts, price), ...] rolling 25h window
+_move_alerted: dict[str, float] = {}      # "{tg_id}_{coin}_{tier}" -> last alert ts
 
 CONFIRM_TTL = 60
 POLL_INTERVAL = 30
 LIQ_WARN_PCT = 15
 DIGEST_TIME = datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc)  # midnight UTC
+MOVE_1H_PCT  = 3.0    # % move in 1 hour to trigger quick-move alert
+MOVE_24H_PCT = 8.0    # % move in 24 hours to trigger big-move alert
+MOVE_COOLDOWN = 2 * 3600  # seconds before re-alerting same coin+tier
 WEB_APP_URL    = "https://whynotvlad.github.io/hl-trade/open.html?v=7"
 LADDER_FORM_URL = "https://whynotvlad.github.io/hl-trade/ladder.html?v=1"
 
@@ -1801,6 +1806,47 @@ async def _poll_notifications(context: ContextTypes.DEFAULT_TYPE):
             stale = [k for k in list(_liq_warned) if k.startswith(f"{tg_id}_") and k[len(f"{tg_id}_"):] not in current_positions]
             for k in stale:
                 _liq_warned.pop(k, None)
+
+            # Auto move alerts — BTC + ETH always, plus any coin with an open position
+            now_ts = time.time()
+            _price_history_cutoff = now_ts - 25 * 3600  # keep 25h
+            watch_coins = {"BTC", "ETH"} | set(current_positions.keys())
+            for coin in watch_coins:
+                px = float(prices.get(coin, 0))
+                if px == 0:
+                    continue
+                hist = _price_history.setdefault(coin, [])
+                hist.append((now_ts, px))
+                # prune old entries
+                _price_history[coin] = [(t, p) for t, p in hist if t >= _price_history_cutoff]
+
+                for tier, window_secs, threshold in [
+                    ("1h",  3600,      MOVE_1H_PCT),
+                    ("24h", 86400,     MOVE_24H_PCT),
+                ]:
+                    cutoff = now_ts - window_secs
+                    old_entries = [(t, p) for t, p in _price_history[coin] if t <= cutoff]
+                    if not old_entries:
+                        continue
+                    ref_px = old_entries[-1][1]  # closest entry at/before the window edge
+                    move_pct = (px - ref_px) / ref_px * 100
+                    if abs(move_pct) < threshold:
+                        continue
+                    cooldown_key = f"{tg_id}_{coin}_{tier}"
+                    last_alerted = _move_alerted.get(cooldown_key, 0)
+                    if now_ts - last_alerted < MOVE_COOLDOWN:
+                        continue
+                    _move_alerted[cooldown_key] = now_ts
+                    direction = "📈" if move_pct > 0 else "📉"
+                    sign = "+" if move_pct > 0 else ""
+                    await context.bot.send_message(
+                        chat_id=tg_id,
+                        text=(
+                            f"{direction} Move Alert — {coin}\n\n"
+                            f"{sign}{move_pct:.1f}% in the last {tier}\n"
+                            f"Current: ${px:,.2f}   Ref: ${ref_px:,.2f}"
+                        ),
+                    )
 
             # Order fill detection
             orders = client.get_open_orders()
