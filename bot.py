@@ -31,7 +31,7 @@ _liq_warned: dict[str, bool] = {}    # "{tg_id}_{coin}" -> True when warning alr
 CONFIRM_TTL = 60
 POLL_INTERVAL = 30
 LIQ_WARN_PCT = 15
-WEB_APP_URL = "https://whynotvlad.github.io/hl-trade/open.html?v=4"
+WEB_APP_URL = "https://whynotvlad.github.io/hl-trade/open.html?v=5"
 
 QUICK_KEYS = ReplyKeyboardMarkup(
     [["/positions", "/orders"], ["/pnl", "/price BTC"]],
