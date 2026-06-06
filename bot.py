@@ -235,12 +235,10 @@ def _fmt_positions(state: dict, prices: dict, spot_usdc: float) -> str:
 
     summary = state.get("marginSummary", {})
     perp = float(summary.get("accountValue", 0))
-    total = perp + spot_usdc
     lines.append(
         f"\n💰 Balance\n"
-        f"   Perp:  ${perp:,.2f}\n"
-        f"   Spot:  ${spot_usdc:,.2f}\n"
-        f"   Total: ${total:,.2f}"
+        f"   Perp: ${perp:,.2f}\n"
+        f"   Spot: ${spot_usdc:,.2f}"
     )
     return "\n".join(lines)
 
