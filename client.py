@@ -12,9 +12,16 @@ class HLClient:
         config.validate()
         self._base_url = config.get_base_url()
         self._account = Account.from_key(config.PRIVATE_KEY)
-        self.address = self._account.address.lower()
         self.info = Info(self._base_url, skip_ws=True)
-        self.exchange = Exchange(self._account, self._base_url)
+
+        if config.ACCOUNT_ADDRESS:
+            # Agent wallet mode: sign with the agent key, query/trade on the master account
+            self.address = config.ACCOUNT_ADDRESS.lower()
+            self.exchange = Exchange(self._account, self._base_url, account_address=config.ACCOUNT_ADDRESS)
+        else:
+            # Direct mode: the private key IS the trading account
+            self.address = self._account.address.lower()
+            self.exchange = Exchange(self._account, self._base_url)
         self._universe: Optional[list] = None
 
     # --- meta / market data ---

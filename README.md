@@ -7,7 +7,8 @@ A command-line interface for trading perpetuals on [Hyperliquid](https://hyperli
 ## Requirements
 
 - Python 3.10+
-- An Ethereum wallet private key (the account that holds your USDC on Hyperliquid)
+- A Hyperliquid account with USDC deposited
+- Your wallet private key (see setup below)
 
 ---
 
@@ -27,7 +28,11 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Copy the example env file and fill in your details:
+Hyperliquid has **no API keys** — authentication is Ethereum wallet signing. There are two ways to configure this:
+
+### Option A — Direct wallet (simplest, good for testnet)
+
+Use the private key of the wallet that holds your USDC deposits.
 
 ```bash
 cp .env.example .env
@@ -36,9 +41,35 @@ cp .env.example .env
 Edit `.env`:
 
 ```env
-PRIVATE_KEY=0x_your_private_key_here
-NETWORK=testnet      # or mainnet
+PRIVATE_KEY=0x_your_main_wallet_private_key
+NETWORK=testnet   # switch to mainnet when ready
 ```
+
+**How to find your private key:**
+- MetaMask → three-dot menu → Account Details → Export Private Key
+- Hyperliquid native wallet → Settings → Export Key
+
+### Option B — Agent wallet (recommended for mainnet)
+
+An agent wallet is a separate Ethereum wallet you authorize to trade on behalf of your main account. It **cannot withdraw funds**, so a leaked key cannot drain your account.
+
+**Setup:**
+
+1. Generate a fresh wallet:
+   ```bash
+   python -c "from eth_account import Account; import secrets; a = Account.from_key(secrets.token_hex(32)); print('Private key:', a.key.hex()); print('Address:', a.address)"
+   ```
+
+2. Approve it on Hyperliquid:
+   - Go to `https://app.hyperliquid.xyz` (or testnet equivalent)
+   - Settings → API → Add API Wallet → paste the address from step 1
+
+3. Edit `.env`:
+   ```env
+   PRIVATE_KEY=0x_agent_wallet_private_key
+   ACCOUNT_ADDRESS=0x_your_main_account_address
+   NETWORK=mainnet
+   ```
 
 > **Security** — never share or commit your `.env` file. It is already listed in `.gitignore`.
 
