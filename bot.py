@@ -4,7 +4,7 @@ import time
 from typing import Optional
 
 from dotenv import load_dotenv
-from telegram import BotCommand, ReplyKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 import db
@@ -31,6 +31,7 @@ _liq_warned: dict[str, bool] = {}    # "{tg_id}_{coin}" -> True when warning alr
 CONFIRM_TTL = 60
 POLL_INTERVAL = 30
 LIQ_WARN_PCT = 15
+WEB_APP_URL = "https://whynotvlad.github.io/hl-trade/open.html"
 
 QUICK_KEYS = ReplyKeyboardMarkup(
     [["/positions", "/orders"], ["/pnl", "/price BTC"]],
@@ -416,9 +417,13 @@ async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if len(args) < 4:
         await update.message.reply_text(
-            "Usage: /open <coin> <long|short> <size> <leverage> [tp] [sl]\n\n"
-            "Example: /open BTC long 0.001 10\n\n"
-            "/help open for full details."
+            "Tap to open the trade form:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "Open Trade Form",
+                    web_app=WebAppInfo(url=WEB_APP_URL),
+                )
+            ]]),
         )
         return
     try:
@@ -893,6 +898,54 @@ async def cmd_listusers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── background notification polling ──────────────────────────────────────────
 
+async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    import json
+    try:
+        data = json.loads(update.message.web_app_data.data)
+        coin     = data["coin"].upper()
+        side     = data["side"]
+        size     = float(data["size"])
+        leverage = int(data["leverage"])
+        tp       = float(data["tp"]) if data.get("tp") else None
+        sl       = float(data["sl"]) if data.get("sl") else None
+        is_buy   = side == "long"
+
+        client = _get_client(update.effective_user.id)
+        price    = client.get_mid_price(coin)
+        notional = price * size
+        margin   = notional / leverage
+        extras   = ""
+        if tp:
+            extras += f"\n   Take-profit: ${tp:,.2f}"
+        if sl:
+            extras += f"\n   Stop-loss:   ${sl:,.2f}"
+
+        preview = (
+            f"Order Preview\n\n"
+            f"{'🟢' if is_buy else '🔴'} {coin} {'LONG' if is_buy else 'SHORT'}\n"
+            f"   Size:      {size} {coin}\n"
+            f"   Price:     ~${price:,.2f}\n"
+            f"   Notional:  ~${notional:,.2f}\n"
+            f"   Leverage:  {leverage}x\n"
+            f"   Margin:    ~${margin:,.2f}"
+            f"{extras}\n\n"
+            f"Send /confirm to execute or /dismiss to cancel.\n"
+            f"Expires in {CONFIRM_TTL}s."
+        )
+        _store_pending(
+            update.effective_user.id, preview,
+            lambda: client.open_position(
+                coin=coin, is_buy=is_buy, size=size,
+                leverage=leverage, tp=tp, sl=sl,
+            ),
+        )
+        await update.message.reply_text(preview)
+    except Exception as e:
+        await update.message.reply_text(f"Error processing form: {e}")
+
+
 async def cmd_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_allowed(update.effective_user.id):
         return
@@ -1069,6 +1122,7 @@ def main():
         app.add_handler(CommandHandler(cmd, handler))
 
     app.job_queue.run_repeating(_poll_notifications, interval=POLL_INTERVAL, first=15)
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     # Must be last — catches any /command not matched above
     app.add_handler(MessageHandler(filters.COMMAND, cmd_unknown))
 

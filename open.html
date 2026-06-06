@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Open Trade</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg:        var(--tg-theme-bg-color, #18181b);
+      --bg2:       var(--tg-theme-secondary-bg-color, #27272a);
+      --text:      var(--tg-theme-text-color, #fafafa);
+      --hint:      var(--tg-theme-hint-color, #71717a);
+      --accent:    var(--tg-theme-button-color, #2563eb);
+      --accent-t:  var(--tg-theme-button-text-color, #fff);
+      --long:      #16a34a;
+      --short:     #dc2626;
+      --radius:    12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 16px 16px 100px;
+      font-size: 15px;
+    }
+
+    h1 { font-size: 18px; font-weight: 700; margin-bottom: 20px; }
+
+    .section { margin-bottom: 20px; }
+    .label {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--hint);
+      margin-bottom: 8px;
+    }
+
+    /* Side toggle */
+    .side-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .side-btn {
+      padding: 14px;
+      border: 2px solid var(--bg2);
+      border-radius: var(--radius);
+      background: var(--bg2);
+      color: var(--hint);
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .side-btn.active-long  { border-color: var(--long);  color: var(--long);  background: rgba(22,163,74,.12); }
+    .side-btn.active-short { border-color: var(--short); color: var(--short); background: rgba(220,38,38,.12); }
+
+    /* Text / number inputs */
+    input[type=text], input[type=number] {
+      width: 100%;
+      padding: 13px 14px;
+      border-radius: var(--radius);
+      border: 2px solid var(--bg2);
+      background: var(--bg2);
+      color: var(--text);
+      font-size: 16px;
+      outline: none;
+      transition: border-color .15s;
+      -webkit-appearance: none;
+    }
+    input[type=text]:focus, input[type=number]:focus { border-color: var(--accent); }
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+    /* Input with unit suffix */
+    .input-wrap { position: relative; }
+    .input-wrap .unit {
+      position: absolute;
+      right: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--hint);
+      font-size: 14px;
+      pointer-events: none;
+    }
+
+    /* Leverage chips */
+    .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip {
+      padding: 10px 16px;
+      border-radius: 999px;
+      border: 2px solid var(--bg2);
+      background: var(--bg2);
+      color: var(--hint);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .chip.active { border-color: var(--accent); color: var(--accent); background: rgba(37,99,235,.12); }
+    .chip-custom { flex: 1; min-width: 80px; }
+    .chip-custom input {
+      width: 100%;
+      padding: 8px 10px;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 600;
+      outline: none;
+      text-align: center;
+    }
+
+    /* Collapsible TP/SL */
+    .tpsl-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      background: var(--bg2);
+      cursor: pointer;
+      user-select: none;
+    }
+    .tpsl-toggle span { font-weight: 600; }
+    .tpsl-toggle .arrow { color: var(--hint); transition: transform .2s; }
+    .tpsl-toggle.open .arrow { transform: rotate(180deg); }
+    .tpsl-body { display: none; margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .tpsl-body.hidden { display: none; }
+    .tpsl-field label { font-size: 12px; color: var(--hint); display: block; margin-bottom: 5px; }
+
+    /* Error */
+    .error { color: #f87171; font-size: 13px; margin-top: 10px; display: none; }
+    .error.show { display: block; }
+
+    /* Summary line */
+    .summary {
+      background: var(--bg2);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--hint);
+      min-height: 42px;
+    }
+    .summary b { color: var(--text); }
+  </style>
+</head>
+<body>
+  <h1>Open Trade</h1>
+
+  <div class="section">
+    <div class="label">Side</div>
+    <div class="side-row">
+      <button class="side-btn active-long" id="btn-long" onclick="setSide('long')">🟢 Long</button>
+      <button class="side-btn" id="btn-short" onclick="setSide('short')">🔴 Short</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Coin</div>
+    <input type="text" id="coin" placeholder="BTC" list="coin-list" autocomplete="off"
+           oninput="this.value=this.value.toUpperCase(); updateSummary()" />
+    <datalist id="coin-list">
+      <option value="BTC"><option value="ETH"><option value="SOL">
+      <option value="AVAX"><option value="ARB"><option value="OP">
+      <option value="DOGE"><option value="LINK"><option value="LTC">
+      <option value="MATIC"><option value="APT"><option value="SUI">
+      <option value="PEPE"><option value="WIF"><option value="TIA">
+    </datalist>
+  </div>
+
+  <div class="section">
+    <div class="label">Size</div>
+    <div class="input-wrap">
+      <input type="number" id="size" placeholder="0.001" step="any" min="0"
+             oninput="updateSummary()" />
+      <span class="unit" id="size-unit">BTC</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Leverage</div>
+    <div class="chips">
+      <div class="chip" onclick="setLeverage(2)">2x</div>
+      <div class="chip active" onclick="setLeverage(5)">5x</div>
+      <div class="chip" onclick="setLeverage(10)">10x</div>
+      <div class="chip" onclick="setLeverage(20)">20x</div>
+      <div class="chip chip-custom">
+        <input type="number" id="lev-custom" placeholder="custom" min="1" max="50"
+               oninput="setLeverage(this.value, true)" onfocus="clearChips()" />
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="tpsl-toggle" id="tpsl-toggle" onclick="toggleTpSl()">
+      <span>Take Profit / Stop Loss</span>
+      <span class="arrow">▾</span>
+    </div>
+    <div class="tpsl-body hidden" id="tpsl-body">
+      <div class="tpsl-field">
+        <label>Take Profit $</label>
+        <input type="number" id="tp" placeholder="optional" step="any" min="0" />
+      </div>
+      <div class="tpsl-field">
+        <label>Stop Loss $</label>
+        <input type="number" id="sl" placeholder="optional" step="any" min="0" />
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="summary" id="summary">Fill in the fields above.</div>
+  </div>
+
+  <div class="error" id="error"></div>
+
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+
+    let side = 'long';
+    let leverage = 5;
+
+    function setSide(s) {
+      side = s;
+      document.getElementById('btn-long').className  = 'side-btn' + (s === 'long'  ? ' active-long'  : '');
+      document.getElementById('btn-short').className = 'side-btn' + (s === 'short' ? ' active-short' : '');
+      updateSummary();
+    }
+
+    function setLeverage(val, fromInput) {
+      leverage = parseInt(val) || 1;
+      if (!fromInput) {
+        document.getElementById('lev-custom').value = '';
+        document.querySelectorAll('.chip:not(.chip-custom)').forEach(c => {
+          c.classList.toggle('active', c.textContent === val + 'x');
+        });
+      }
+      updateSummary();
+    }
+
+    function clearChips() {
+      document.querySelectorAll('.chip:not(.chip-custom)').forEach(c => c.classList.remove('active'));
+    }
+
+    function toggleTpSl() {
+      const body = document.getElementById('tpsl-body');
+      const toggle = document.getElementById('tpsl-toggle');
+      const hidden = body.classList.toggle('hidden');
+      toggle.classList.toggle('open', !hidden);
+    }
+
+    function updateSummary() {
+      const coin = document.getElementById('coin').value.trim() || '—';
+      const size = parseFloat(document.getElementById('size').value) || 0;
+      document.getElementById('size-unit').textContent = coin === '—' ? '' : coin;
+      const el = document.getElementById('summary');
+      if (!coin || coin === '—' || size === 0) {
+        el.innerHTML = 'Fill in the fields above.';
+        return;
+      }
+      const dir = side === 'long' ? '🟢 Long' : '🔴 Short';
+      el.innerHTML = `<b>${dir} ${size} ${coin}</b> at <b>${leverage}x</b> leverage`;
+    }
+
+    function validate() {
+      const coin = document.getElementById('coin').value.trim();
+      const size = parseFloat(document.getElementById('size').value);
+      const lev  = leverage;
+      const err  = document.getElementById('error');
+
+      if (!coin) { show(err, 'Enter a coin symbol.'); return false; }
+      if (!size || size <= 0) { show(err, 'Enter a valid size greater than 0.'); return false; }
+      if (!lev  || lev  < 1 || lev > 50) { show(err, 'Leverage must be between 1 and 50.'); return false; }
+
+      const tp = parseFloat(document.getElementById('tp').value) || null;
+      const sl = parseFloat(document.getElementById('sl').value) || null;
+      if (tp && sl) {
+        if (side === 'long'  && tp <= sl) { show(err, 'For a Long: TP must be above SL.'); return false; }
+        if (side === 'short' && tp >= sl) { show(err, 'For a Short: TP must be below SL.'); return false; }
+      }
+
+      err.classList.remove('show');
+      return true;
+    }
+
+    function show(el, msg) { el.textContent = msg; el.classList.add('show'); }
+
+    tg.MainButton.setText('Preview Order');
+    tg.MainButton.show();
+    tg.MainButton.onClick(() => {
+      if (!validate()) return;
+      const payload = {
+        coin:     document.getElementById('coin').value.trim().toUpperCase(),
+        side:     side,
+        size:     document.getElementById('size').value.trim(),
+        leverage: String(leverage),
+        tp:       document.getElementById('tp').value.trim() || '',
+        sl:       document.getElementById('sl').value.trim() || '',
+      };
+      tg.sendData(JSON.stringify(payload));
+    });
+
+    updateSummary();
+  </script>
+</body>
+</html>
