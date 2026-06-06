@@ -657,5 +657,104 @@ class TestWebAppPayload(unittest.TestCase):
         self.assertIsNone(p["limit_price"])
 
 
+class TestSLLadderClient(unittest.TestCase):
+    def _make_client(self, szi, coin="BTC"):
+        import client as cli
+        c = cli.HLClient()
+        c.info = MagicMock()
+        c.info.user_state.return_value = {"assetPositions": [{"position": {
+            "coin": coin, "szi": szi, "entryPx": "60000",
+            "unrealizedPnl": "0", "leverage": {"value": 5, "type": "cross"},
+        }}], "marginSummary": {}}
+        c.exchange = MagicMock()
+        c.exchange.order.return_value = {
+            "status": "ok",
+            "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 1}}]}},
+        }
+        return c
+
+    def test_uses_trigger_order_type(self):
+        c = self._make_client("-0.003")
+        c.slladder_close("BTC", 3, 61000, 63000)
+        for call_args in c.exchange.order.call_args_list:
+            args = call_args[0]
+            order_type = args[4]
+            self.assertIn("trigger", order_type)
+            self.assertTrue(order_type["trigger"]["isMarket"])
+            self.assertEqual(order_type["trigger"]["tpsl"], "sl")
+
+    def test_trigger_price_matches_price_arg(self):
+        c = self._make_client("-0.003")
+        c.slladder_close("BTC", 3, 61000, 63000)
+        for call_args in c.exchange.order.call_args_list:
+            args = call_args[0]
+            px = args[3]
+            trigger_px = args[4]["trigger"]["triggerPx"]
+            self.assertEqual(px, trigger_px)
+
+    def test_short_close_uses_is_buy_true(self):
+        c = self._make_client("-0.003")
+        c.slladder_close("BTC", 3, 61000, 63000)
+        for call_args in c.exchange.order.call_args_list:
+            self.assertTrue(call_args[0][1])
+
+    def test_long_close_uses_is_buy_false(self):
+        c = self._make_client("1.0", "ETH")
+        c.slladder_close("ETH", 3, 3200, 2800)
+        for call_args in c.exchange.order.call_args_list:
+            self.assertFalse(call_args[0][1])
+
+    def test_all_orders_reduce_only(self):
+        c = self._make_client("-0.003")
+        c.slladder_close("BTC", 3, 61000, 63000)
+        for call_args in c.exchange.order.call_args_list:
+            self.assertTrue(call_args[1].get("reduce_only"))
+
+    def test_sizes_sum_to_position_size(self):
+        c = self._make_client("-0.003")
+        c.slladder_close("BTC", 3, 61000, 63000)
+        total = sum(call[0][2] for call in c.exchange.order.call_args_list)
+        self.assertAlmostEqual(total, 0.003, places=7)
+
+    def test_correct_order_count(self):
+        c = self._make_client("-0.5", "ETH")
+        c.slladder_close("ETH", 5, 3100, 3500)
+        self.assertEqual(c.exchange.order.call_count, 5)
+
+    def test_no_position_raises(self):
+        import client as cli
+        c = cli.HLClient()
+        c.info = MagicMock()
+        c.info.user_state.return_value = {"assetPositions": [], "marginSummary": {}}
+        with self.assertRaises(ValueError):
+            c.slladder_close("BTC", 3, 61000, 63000)
+
+    def test_parts_out_of_range_raises(self):
+        c = self._make_client("-0.003")
+        with self.assertRaises(ValueError):
+            c.slladder_close("BTC", 1, 61000, 63000)
+        with self.assertRaises(ValueError):
+            c.slladder_close("BTC", 21, 61000, 63000)
+
+    def test_boundary_parts(self):
+        c = self._make_client("-0.003")
+        r2 = c.slladder_close("BTC", 2, 61000, 63000)
+        self.assertEqual(len(r2), 2)
+        c.exchange.order.reset_mock()
+        r20 = c.slladder_close("BTC", 20, 61000, 63000)
+        self.assertEqual(len(r20), 20)
+
+    def test_differs_from_ladder_order_type(self):
+        # slladder uses trigger, ladder uses limit GTC — must be different
+        c = self._make_client("-0.003")
+        c.slladder_close("BTC", 2, 61000, 63000)
+        slladder_type = c.exchange.order.call_args_list[0][0][4]
+        c.exchange.order.reset_mock()
+        c.ladder_close("BTC", 2, 60000, 58000)
+        ladder_type = c.exchange.order.call_args_list[0][0][4]
+        self.assertIn("trigger", slladder_type)
+        self.assertIn("limit", ladder_type)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

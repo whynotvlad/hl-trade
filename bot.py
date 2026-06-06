@@ -130,6 +130,19 @@ _HELP: dict[str, str] = {
         "Each order is reduce-only (cannot increase your position).\n"
         "All orders placed as resting limit GTC — visible in /orders."
     ),
+    "slladder": (
+        "Close a position in evenly-spaced stop-loss trigger orders (scaled stop).\n\n"
+        "Usage:\n"
+        "  /slladder <coin> <parts> <from_price> <to_price>\n\n"
+        "Examples:\n"
+        "  /slladder ETH 5 2900 2600   — SHORT: 5 stop triggers from $2900 up to... wait\n"
+        "  /slladder BTC 3 58000 55000 — LONG: 3 stop triggers at $58k, $56.5k, $55k\n\n"
+        "Each trigger fires a market close for 1/N of your position.\n"
+        "Use prices on the loss side of current market:\n"
+        "  LONG  → prices below current price\n"
+        "  SHORT → prices above current price\n\n"
+        "Orders appear in /orders as stop triggers."
+    ),
     "pnl": (
         "Show realised PnL for the last 7 days.\n\n"
         "Usage:\n"
@@ -345,6 +358,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/open <coin> <long|short> <size> <leverage> [tp] [sl]",
             "/close <coin> [size]",
             "/ladder <coin> <parts> <from> <to>",
+            "/slladder <coin> <parts> <from> <to>",
             "/tp <coin> <price> [size]",
             "/sl <coin> <price> [size]",
             "/cancel <coin> <tp|sl|order_id>",
@@ -858,6 +872,91 @@ async def cmd_ladder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(preview)
     except Exception as e:
         await update.message.reply_text(f"Error: {e}\n\n/help ladder")
+
+
+async def cmd_slladder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    args = context.args
+    if len(args) < 4:
+        await update.message.reply_text(
+            "Usage: /slladder <coin> <parts> <from_price> <to_price>\n\n"
+            "Example: /slladder BTC 3 58000 55000\n\n/help slladder"
+        )
+        return
+    try:
+        coin       = args[0].upper()
+        n_parts    = int(args[1])
+        from_price = float(args[2])
+        to_price   = float(args[3])
+
+        if n_parts < 2 or n_parts > 20:
+            await update.message.reply_text("Number of parts must be between 2 and 20.")
+            return
+        if from_price <= 0 or to_price <= 0:
+            await update.message.reply_text("Prices must be greater than 0.")
+            return
+        if from_price == to_price:
+            await update.message.reply_text("from_price and to_price must be different.")
+            return
+
+        client = _get_client(update.effective_user.id)
+        pos = client._find_position(coin)
+        if not pos:
+            await update.message.reply_text(f"No open {coin} position.\n\nCheck /positions")
+            return
+
+        pos_size  = float(pos["szi"])
+        is_long   = pos_size > 0
+        total_sz  = abs(pos_size)
+        per_order = round(total_sz / n_parts, 8)
+        mid       = client.get_mid_price(coin)
+
+        from math import floor, log10
+        def _round_px(px):
+            if px <= 0: return px
+            mag = int(floor(log10(abs(px))))
+            return round(px, 4 - mag)
+
+        prices = [
+            _round_px(from_price + (to_price - from_price) * i / (n_parts - 1))
+            for i in range(n_parts)
+        ]
+
+        # Warn if prices are on the wrong side (would fire immediately)
+        warning = ""
+        if is_long and any(p >= mid for p in prices):
+            warning = "\n⚠️ Some prices are above current market — those triggers will fire immediately."
+        elif not is_long and any(p <= mid for p in prices):
+            warning = "\n⚠️ Some prices are below current market — those triggers will fire immediately."
+
+        order_lines = []
+        placed = 0.0
+        for i, px in enumerate(prices):
+            sz = round(total_sz - placed, 8) if i == n_parts - 1 else per_order
+            placed = round(placed + sz, 8)
+            order_lines.append(f"   {i+1}. {sz} {coin} @ ${px:,.2f} (trigger)")
+
+        preview = (
+            f"SL Ladder Preview\n\n"
+            f"{'🟢' if is_long else '🔴'} {coin} {'LONG' if is_long else 'SHORT'}\n"
+            f"   Current:    ~${mid:,.2f}\n"
+            f"   Total size: {total_sz} {coin}\n"
+            f"   Orders:     {n_parts}\n"
+            f"   Per order:  ~{per_order} {coin}\n\n"
+            + "\n".join(order_lines) +
+            f"{warning}\n\n"
+            f"Each trigger closes that slice at market when price hits it.\n"
+            f"Send /confirm to place all {n_parts} stop triggers or /dismiss to cancel.\n"
+            f"Expires in {CONFIRM_TTL}s."
+        )
+        _store_pending(
+            update.effective_user.id, preview,
+            lambda c=coin, n=n_parts, fp=from_price, tp=to_price: client.slladder_close(c, n, fp, tp),
+        )
+        await update.message.reply_text(preview)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}\n\n/help slladder")
 
 
 async def cmd_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1430,6 +1529,7 @@ async def _post_init(app: Application):
         BotCommand("open",        "Open a position"),
         BotCommand("close",       "Close a position"),
         BotCommand("ladder",      "Scaled exit — /ladder ETH 5 3500 3000"),
+        BotCommand("slladder",    "Scaled stop — /slladder ETH 5 2900 2600"),
         BotCommand("tp",          "Set take-profit"),
         BotCommand("sl",          "Set stop-loss"),
         BotCommand("cancel",      "Cancel an order"),
@@ -1458,6 +1558,7 @@ def main():
         ("open",        cmd_open),
         ("close",       cmd_close),
         ("ladder",      cmd_ladder),
+        ("slladder",    cmd_slladder),
         ("tp",          cmd_tp),
         ("sl",          cmd_sl),
         ("cancel",      cmd_cancel),

@@ -183,6 +183,47 @@ class HLClient:
 
         return results
 
+    def slladder_close(
+        self,
+        coin: str,
+        n_parts: int,
+        from_price: float,
+        to_price: float,
+    ) -> list[dict]:
+        pos = self._find_position(coin)
+        if pos is None:
+            raise ValueError(f"No open position for {coin}.")
+        if n_parts < 2 or n_parts > 20:
+            raise ValueError("Number of parts must be between 2 and 20.")
+
+        pos_size = float(pos["szi"])
+        is_long = pos_size > 0
+        total_size = abs(pos_size)
+        is_buy = not is_long
+
+        prices = [
+            _round_price(from_price + (to_price - from_price) * i / (n_parts - 1))
+            for i in range(n_parts)
+        ]
+
+        per_order = round(total_size / n_parts, 8)
+        results = []
+        placed = 0.0
+        for i, px in enumerate(prices):
+            sz = round(total_size - placed, 8) if i == n_parts - 1 else per_order
+            if sz <= 0:
+                continue
+            order_type = {"trigger": {"triggerPx": px, "isMarket": True, "tpsl": "sl"}}
+            result = self.exchange.order(
+                coin, is_buy, sz, px,
+                order_type,
+                reduce_only=True,
+            )
+            results.append(result)
+            placed = round(placed + sz, 8)
+
+        return results
+
     def set_tp(
         self,
         coin: str,
