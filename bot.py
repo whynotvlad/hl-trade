@@ -32,6 +32,9 @@ _awaiting_partial: dict[int, str] = {}              # tg_id -> coin, waiting for
 _awaiting_price: dict[int, tuple[str, str]] = {}    # tg_id -> (action, coin), waiting for TP/SL price
 _price_history: dict[str, list] = {}      # coin -> [(ts, price), ...] rolling 25h window
 _move_alerted: dict[str, float] = {}      # "{tg_id}_{coin}_{tier}" -> last alert ts
+_poll_errors: dict[int, int] = {}         # tg_id -> consecutive error count
+_poll_error_alerted: set = set()          # tg_ids already notified this error streak
+PRICE_HISTORY_FILE = "price_history.json"
 
 CONFIRM_TTL = 60
 POLL_INTERVAL = 30
@@ -1620,6 +1623,34 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"Error processing form: {e}")
 
 
+def _load_price_history():
+    import json as _json
+    try:
+        with open(PRICE_HISTORY_FILE) as f:
+            raw = _json.load(f)
+        cutoff = time.time() - 25 * 3600
+        for coin, entries in raw.items():
+            _price_history[coin] = [(t, p) for t, p in entries if t >= cutoff]
+        logging.info(f"Loaded price history for {len(_price_history)} coins.")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logging.warning(f"Could not load price history: {e}")
+
+
+def _save_price_history():
+    import json as _json
+    try:
+        with open(PRICE_HISTORY_FILE, "w") as f:
+            _json.dump(_price_history, f)
+    except Exception as e:
+        logging.warning(f"Could not save price history: {e}")
+
+
+async def _persist_price_history(context: ContextTypes.DEFAULT_TYPE):
+    _save_price_history()
+
+
 def _build_digest(fills: list, positions: list) -> Optional[str]:
     """Build digest text from today's fills and current positions. Returns None if nothing to report."""
     now_ms = time.time() * 1000
@@ -1684,11 +1715,13 @@ async def _send_digest_to_user(bot, tg_id: int):
 
 
 async def _daily_digest(context: ContextTypes.DEFAULT_TYPE):
+    import asyncio
     users = db.get_all_registered_users()
     for user in users:
         tg_id = user["tg_id"]
         if _is_allowed(tg_id):
             await _send_digest_to_user(context.bot, tg_id)
+            await asyncio.sleep(0.05)  # 20 msg/s — safely under Telegram's 30/s limit
 
 
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1709,6 +1742,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     users = db.get_all_registered_users()
     all_ids = {u["tg_id"] for u in users} | ADMIN_IDS
+    import asyncio
     sent = failed = 0
     for tg_id in all_ids:
         try:
@@ -1716,6 +1750,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent += 1
         except Exception:
             failed += 1
+        await asyncio.sleep(0.05)  # 20 msg/s — safely under Telegram's 30/s limit
     await update.message.reply_text(f"Broadcast done: {sent} sent, {failed} failed.")
 
 
@@ -1879,8 +1914,30 @@ async def _poll_notifications(context: ContextTypes.DEFAULT_TYPE):
                 "positions": current_positions,
             }
 
+            # Reset error counter on success
+            _poll_errors.pop(tg_id, None)
+            _poll_error_alerted.discard(tg_id)
+
         except Exception as e:
             logging.debug(f"Notification poll failed for {tg_id}: {e}")
+            count = _poll_errors.get(tg_id, 0) + 1
+            _poll_errors[tg_id] = count
+            if count >= 3 and tg_id not in _poll_error_alerted:
+                _poll_error_alerted.add(tg_id)
+                for admin_id in ADMIN_IDS:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=admin_id,
+                            text=(
+                                f"⚠️ Bot health alert\n\n"
+                                f"Poll failing for user {tg_id} "
+                                f"({count} consecutive errors).\n"
+                                f"Last error: {e}\n\n"
+                                f"Check: journalctl -u hl-bot -n 50"
+                            ),
+                        )
+                    except Exception:
+                        pass
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
@@ -1915,6 +1972,7 @@ def main():
     if not TOKEN:
         raise RuntimeError("TELEGRAM_TOKEN not set in .env")
     db.init_db()
+    _load_price_history()
 
     app = Application.builder().token(TOKEN).post_init(_post_init).build()
 
@@ -1950,6 +2008,7 @@ def main():
         app.add_handler(CommandHandler(cmd, handler))
 
     app.job_queue.run_repeating(_poll_notifications, interval=POLL_INTERVAL, first=15)
+    app.job_queue.run_repeating(_persist_price_history, interval=300, first=300)  # every 5 min
     app.job_queue.run_daily(_daily_digest, time=DIGEST_TIME)
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(CallbackQueryHandler(handle_close_callback, pattern="^(close_|set_tp:|set_sl:)"))
