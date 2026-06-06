@@ -2022,28 +2022,33 @@ async def _poll_notifications(context: ContextTypes.DEFAULT_TYPE):
 
 async def _post_init(app: Application):
     await app.bot.set_my_commands([
-        BotCommand("positions",   "Open positions & balance"),
-        BotCommand("orders",      "Resting orders"),
-        BotCommand("pnl",         "7-day realised PnL"),
-        BotCommand("risk",        "Margin & liquidation risk"),
+        # ── top-level actions ────────────────────────────
         BotCommand("overview",    "BTC & ETH charts, prices, funding rates"),
-        BotCommand("chart",       "Candlestick chart — /chart BTC 1h"),
-        BotCommand("price",       "Current price — /price BTC"),
-        BotCommand("alert",       "Set price alert — /alert BTC 70000"),
-        BotCommand("alerts",      "List active alerts"),
+        BotCommand("positions",   "Open positions & balance"),
         BotCommand("open",        "Open a position"),
         BotCommand("close",       "Close a position"),
-        BotCommand("ladder",      "Scaled exit — /ladder ETH 5 3500 3000"),
+        BotCommand("ladder",      "Scaled close — /ladder ETH 5 3500 3000"),
+        # ── order management ─────────────────────────────
         BotCommand("slladder",    "Scaled stop — /slladder ETH 5 2900 2600"),
         BotCommand("tp",          "Set take-profit"),
         BotCommand("sl",          "Set stop-loss"),
         BotCommand("cancel",      "Cancel an order"),
+        BotCommand("orders",      "Resting orders"),
         BotCommand("confirm",     "Execute previewed order"),
         BotCommand("dismiss",     "Discard previewed order"),
-        BotCommand("assets",      "List tradeable markets"),
+        # ── account & analytics ──────────────────────────
+        BotCommand("pnl",         "7-day realised PnL"),
         BotCommand("digest",      "Today's PnL digest on demand"),
-        BotCommand("help",        "Command help"),
+        BotCommand("risk",        "Margin & liquidation risk"),
+        # ── market data ──────────────────────────────────
+        BotCommand("chart",       "Candlestick chart — /chart BTC 1h"),
+        BotCommand("price",       "Current price — /price BTC"),
+        BotCommand("alert",       "Set price alert — /alert BTC 70000"),
+        BotCommand("alerts",      "List active alerts"),
+        BotCommand("assets",      "List tradeable markets"),
+        # ── setup ────────────────────────────────────────
         BotCommand("register",    "Link your Hyperliquid account"),
+        BotCommand("help",        "Command help"),
     ])
 
 
