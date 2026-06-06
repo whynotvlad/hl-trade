@@ -117,6 +117,19 @@ _HELP: dict[str, str] = {
         "View active alerts: /alerts\n"
         "Cancel an alert:   /cancelalert <id>"
     ),
+    "ladder": (
+        "Close a position in evenly-spaced limit orders (scaled exit).\n\n"
+        "Usage:\n"
+        "  /ladder <coin> <parts> <from_price> <to_price>\n\n"
+        "Examples:\n"
+        "  /ladder ETH 5 3500 3000   — 5 orders, $3500 down to $3000\n"
+        "  /ladder BTC 3 65000 63000 — 3 orders, $65000 down to $63000\n\n"
+        "parts      — number of orders (2-20)\n"
+        "from_price — price of the first order\n"
+        "to_price   — price of the last order\n\n"
+        "Each order is reduce-only (cannot increase your position).\n"
+        "All orders placed as resting limit GTC — visible in /orders."
+    ),
     "pnl": (
         "Show realised PnL for the last 7 days.\n\n"
         "Usage:\n"
@@ -184,7 +197,15 @@ def _pop_pending(tg_id: int) -> Optional[dict]:
     return entry
 
 
-def _fmt_result(result: dict) -> str:
+def _fmt_result(result) -> str:
+    # Ladder close returns a list of results
+    if isinstance(result, list):
+        ok     = sum(1 for r in result if r.get("status") == "ok")
+        failed = len(result) - ok
+        msg = f"Ladder: placed {ok}/{len(result)} orders."
+        if failed:
+            msg += f"\n{failed} failed — check /orders for what went through."
+        return msg
     if result.get("status") != "ok":
         return f"Error: {result}"
     lines = []
@@ -323,6 +344,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Trading",
             "/open <coin> <long|short> <size> <leverage> [tp] [sl]",
             "/close <coin> [size]",
+            "/ladder <coin> <parts> <from> <to>",
             "/tp <coin> <price> [size]",
             "/sl <coin> <price> [size]",
             "/cancel <coin> <tp|sl|order_id>",
@@ -759,6 +781,83 @@ async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(preview)
     except Exception as e:
         await update.message.reply_text(f"Error: {e}\n\n/help close")
+
+
+async def cmd_ladder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    args = context.args
+    if len(args) < 4:
+        await update.message.reply_text(
+            "Usage: /ladder <coin> <parts> <from_price> <to_price>\n\n"
+            "Example: /ladder ETH 5 3500 3000\n\n/help ladder"
+        )
+        return
+    try:
+        coin       = args[0].upper()
+        n_parts    = int(args[1])
+        from_price = float(args[2])
+        to_price   = float(args[3])
+
+        if n_parts < 2 or n_parts > 20:
+            await update.message.reply_text("Number of parts must be between 2 and 20.")
+            return
+        if from_price <= 0 or to_price <= 0:
+            await update.message.reply_text("Prices must be greater than 0.")
+            return
+        if from_price == to_price:
+            await update.message.reply_text("from_price and to_price must be different.")
+            return
+
+        client = _get_client(update.effective_user.id)
+        pos = client._find_position(coin)
+        if not pos:
+            await update.message.reply_text(f"No open {coin} position.\n\nCheck /positions")
+            return
+
+        pos_size  = float(pos["szi"])
+        is_long   = pos_size > 0
+        total_sz  = abs(pos_size)
+        per_order = round(total_sz / n_parts, 8)
+
+        from math import floor, log10
+        def _round_px(px):
+            if px <= 0: return px
+            mag = int(floor(log10(abs(px))))
+            return round(px, 4 - mag)
+
+        prices = [
+            _round_px(from_price + (to_price - from_price) * i / (n_parts - 1))
+            for i in range(n_parts)
+        ]
+
+        # Build preview lines
+        order_lines = []
+        placed = 0.0
+        for i, px in enumerate(prices):
+            sz = round(total_sz - placed, 8) if i == n_parts - 1 else per_order
+            placed = round(placed + sz, 8)
+            order_lines.append(f"   {i+1}. {sz} {coin} @ ${px:,.2f}")
+
+        direction = "above → below" if from_price > to_price else "below → above"
+        preview = (
+            f"Ladder Close Preview\n\n"
+            f"{'🟢' if is_long else '🔴'} {coin} {'LONG' if is_long else 'SHORT'}\n"
+            f"   Total size: {total_sz} {coin}\n"
+            f"   Orders:     {n_parts}  ({direction})\n"
+            f"   Per order:  ~{per_order} {coin}\n\n"
+            + "\n".join(order_lines) +
+            f"\n\nAll orders are reduce-only limit (GTC).\n"
+            f"Send /confirm to place all {n_parts} orders or /dismiss to cancel.\n"
+            f"Expires in {CONFIRM_TTL}s."
+        )
+        _store_pending(
+            update.effective_user.id, preview,
+            lambda c=coin, n=n_parts, fp=from_price, tp=to_price: client.ladder_close(c, n, fp, tp),
+        )
+        await update.message.reply_text(preview)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}\n\n/help ladder")
 
 
 async def cmd_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1330,6 +1429,7 @@ async def _post_init(app: Application):
         BotCommand("alerts",      "List active alerts"),
         BotCommand("open",        "Open a position"),
         BotCommand("close",       "Close a position"),
+        BotCommand("ladder",      "Scaled exit — /ladder ETH 5 3500 3000"),
         BotCommand("tp",          "Set take-profit"),
         BotCommand("sl",          "Set stop-loss"),
         BotCommand("cancel",      "Cancel an order"),
@@ -1357,6 +1457,7 @@ def main():
         ("positions",   cmd_positions),
         ("open",        cmd_open),
         ("close",       cmd_close),
+        ("ladder",      cmd_ladder),
         ("tp",          cmd_tp),
         ("sl",          cmd_sl),
         ("cancel",      cmd_cancel),

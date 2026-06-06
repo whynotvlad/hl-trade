@@ -141,6 +141,48 @@ class HLClient:
 
         return self.exchange.order(coin, is_buy, close_size, price, order_type, reduce_only=True)
 
+    def ladder_close(
+        self,
+        coin: str,
+        n_parts: int,
+        from_price: float,
+        to_price: float,
+    ) -> list[dict]:
+        pos = self._find_position(coin)
+        if pos is None:
+            raise ValueError(f"No open position for {coin}.")
+        if n_parts < 2 or n_parts > 20:
+            raise ValueError("Number of parts must be between 2 and 20.")
+
+        pos_size = float(pos["szi"])
+        is_long = pos_size > 0
+        total_size = abs(pos_size)
+        is_buy = not is_long  # sell to close long, buy to close short
+
+        # Evenly spaced prices
+        prices = [
+            _round_price(from_price + (to_price - from_price) * i / (n_parts - 1))
+            for i in range(n_parts)
+        ]
+
+        # Equal per-order size; last order absorbs rounding remainder
+        per_order = round(total_size / n_parts, 8)
+        results = []
+        placed = 0.0
+        for i, px in enumerate(prices):
+            sz = round(total_size - placed, 8) if i == n_parts - 1 else per_order
+            if sz <= 0:
+                continue
+            result = self.exchange.order(
+                coin, is_buy, sz, px,
+                {"limit": {"tif": "Gtc"}},
+                reduce_only=True,
+            )
+            results.append(result)
+            placed = round(placed + sz, 8)
+
+        return results
+
     def set_tp(
         self,
         coin: str,
