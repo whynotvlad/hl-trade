@@ -1,5 +1,6 @@
 import sqlite3
 import os
+from contextlib import contextmanager
 from typing import Optional
 from cryptography.fernet import Fernet
 
@@ -13,8 +14,22 @@ def _fernet() -> Fernet:
     return Fernet(key.encode())
 
 
+@contextmanager
+def _db():
+    """Open a SQLite connection, commit on success, rollback on error, always close."""
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def init_db():
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -45,7 +60,7 @@ def init_db():
 
 def register_user(tg_id: int, agent_key: str, account_address: str):
     encrypted = _fernet().encrypt(agent_key.encode()).decode()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO users (tg_id, agent_key, account_address) VALUES (?, ?, ?)",
             (tg_id, encrypted, account_address),
@@ -53,7 +68,7 @@ def register_user(tg_id: int, agent_key: str, account_address: str):
 
 
 def get_user(tg_id: int) -> Optional[dict]:
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         row = conn.execute(
             "SELECT agent_key, account_address FROM users WHERE tg_id = ?", (tg_id,)
         ).fetchone()
@@ -66,14 +81,14 @@ def get_user(tg_id: int) -> Optional[dict]:
 
 
 def is_registered(tg_id: int) -> bool:
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         return conn.execute(
             "SELECT 1 FROM users WHERE tg_id = ?", (tg_id,)
         ).fetchone() is not None
 
 
 def get_all_registered_users() -> list[dict]:
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         rows = conn.execute("SELECT tg_id FROM users").fetchall()
     return [{"tg_id": r[0]} for r in rows]
 
@@ -81,7 +96,7 @@ def get_all_registered_users() -> list[dict]:
 # ── access control ────────────────────────────────────────────────────────────
 
 def add_allowed_user(tg_id: int, added_by: int):
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO allowed_users (tg_id, added_by, added_at) VALUES (?, ?, datetime('now'))",
             (tg_id, added_by),
@@ -89,21 +104,21 @@ def add_allowed_user(tg_id: int, added_by: int):
 
 
 def remove_allowed_user(tg_id: int):
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         conn.execute("DELETE FROM allowed_users WHERE tg_id = ?", (tg_id,))
         conn.execute("DELETE FROM users WHERE tg_id = ?", (tg_id,))
         conn.execute("DELETE FROM alerts WHERE tg_id = ?", (tg_id,))
 
 
 def is_allowed_user(tg_id: int) -> bool:
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         return conn.execute(
             "SELECT 1 FROM allowed_users WHERE tg_id = ?", (tg_id,)
         ).fetchone() is not None
 
 
 def get_allowed_users() -> list[dict]:
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         rows = conn.execute(
             "SELECT tg_id, added_by, added_at FROM allowed_users ORDER BY added_at"
         ).fetchall()
@@ -113,7 +128,7 @@ def get_allowed_users() -> list[dict]:
 # ── price alerts ──────────────────────────────────────────────────────────────
 
 def add_alert(tg_id: int, coin: str, direction: str, price: float) -> int:
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         cur = conn.execute(
             "INSERT INTO alerts (tg_id, coin, direction, price) VALUES (?, ?, ?, ?)",
             (tg_id, coin, direction, price),
@@ -122,7 +137,7 @@ def add_alert(tg_id: int, coin: str, direction: str, price: float) -> int:
 
 
 def get_alerts(tg_id: int) -> list[dict]:
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         rows = conn.execute(
             "SELECT id, coin, direction, price FROM alerts WHERE tg_id = ? ORDER BY id",
             (tg_id,),
@@ -131,7 +146,7 @@ def get_alerts(tg_id: int) -> list[dict]:
 
 
 def get_all_alerts() -> list[dict]:
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         rows = conn.execute(
             "SELECT id, tg_id, coin, direction, price FROM alerts"
         ).fetchall()
@@ -139,5 +154,5 @@ def get_all_alerts() -> list[dict]:
 
 
 def delete_alert(alert_id: int):
-    with sqlite3.connect(DB_PATH) as conn:
+    with _db() as conn:
         conn.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
