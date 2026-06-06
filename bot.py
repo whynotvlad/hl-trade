@@ -1362,7 +1362,7 @@ def main():
 
     app.job_queue.run_repeating(_poll_notifications, interval=POLL_INTERVAL, first=15)
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
-    app.add_handler(CallbackQueryHandler(handle_close_callback, pattern="^close_"))
+    app.add_handler(CallbackQueryHandler(handle_close_callback, pattern="^(close_|set_tp:|set_sl:)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     # Must be last — catches any /command not matched above
     app.add_handler(MessageHandler(filters.COMMAND, cmd_unknown))
