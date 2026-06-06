@@ -105,20 +105,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _check_access(update):
         return
     await update.message.reply_text(
-        "hl\\-trade bot\n\n"
+        "hl-trade bot\n\n"
         "Register once:\n"
-        "/register <agent\\_key> <account\\_address>\n\n"
+        "/register <agent_key> <account_address>\n\n"
         "Commands:\n"
         "/positions\n"
         "/open <coin> <long|short> <size> <leverage> [tp] [sl]\n"
         "/close <coin> [size]\n"
         "/tp <coin> <price> [size]\n"
         "/sl <coin> <price> [size]\n"
-        "/cancel <coin> <tp|sl|order\\_id>\n"
+        "/cancel <coin> <tp|sl|order_id>\n"
         "/orders\n"
         "/price <coin>\n"
-        "/assets",
-        parse_mode="MarkdownV2",
+        "/assets"
     )
 
 
