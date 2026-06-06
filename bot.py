@@ -1,6 +1,8 @@
 import datetime
+import fcntl
 import logging
 import os
+import sys
 import time
 from typing import Optional
 
@@ -14,6 +16,15 @@ from client import HLClient
 load_dotenv()
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
+
+# Single-instance guard: exit immediately if another bot.py is already running.
+_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".bot.lock")
+_lock_fh = open(_LOCK_FILE, "w")
+try:
+    fcntl.flock(_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    logging.error("Another bot instance is already running — exiting.")
+    sys.exit(1)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
