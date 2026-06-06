@@ -346,6 +346,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/orders — resting orders",
             "/pnl — 7-day realised PnL",
             "/risk — margin & liquidation risk",
+            "/chart <coin> [5m|15m|1h|4h|1d] — candlestick chart",
             "/price <coin> — current price",
             "/assets — available markets",
             "",
@@ -959,6 +960,130 @@ async def cmd_slladder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {e}\n\n/help slladder")
 
 
+_CHART_INTERVALS = {"5m", "15m", "1h", "4h", "1d"}
+_CHART_HOURS = {"5m": 24, "15m": 24, "1h": 24, "4h": 7*24, "1d": 30*24}
+
+
+def _build_chart(candles: list, coin: str, interval: str) -> "io.BytesIO":
+    import io
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    import matplotlib.ticker as mticker
+    from datetime import datetime, timezone
+
+    if not candles:
+        raise ValueError("No candle data returned.")
+
+    times  = [datetime.fromtimestamp(c["t"] / 1000, tz=timezone.utc) for c in candles]
+    opens  = [float(c["o"]) for c in candles]
+    highs  = [float(c["h"]) for c in candles]
+    lows   = [float(c["l"]) for c in candles]
+    closes = [float(c["c"]) for c in candles]
+    vols   = [float(c["v"]) for c in candles]
+
+    BG, UP, DOWN, GRID, TEXT = "#18181b", "#16a34a", "#dc2626", "#27272a", "#a1a1aa"
+
+    fig, (ax, vax) = plt.subplots(
+        2, 1, figsize=(12, 7),
+        gridspec_kw={"height_ratios": [4, 1], "hspace": 0.04},
+        facecolor=BG,
+    )
+    ax.set_facecolor(BG)
+    vax.set_facecolor(BG)
+
+    n, W = len(candles), 0.6
+    for i, (o, h, l, c) in enumerate(zip(opens, highs, lows, closes)):
+        color = UP if c >= o else DOWN
+        ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=2)
+        rect = mpatches.FancyBboxPatch(
+            (i - W / 2, min(o, c)), W, max(abs(c - o), (h - l) * 0.005),
+            boxstyle="square,pad=0", linewidth=0, facecolor=color, zorder=3,
+        )
+        ax.add_patch(rect)
+
+    for i, (o, c, v) in enumerate(zip(opens, closes, vols)):
+        vax.bar(i, v, width=W, color=UP if c >= o else DOWN, alpha=0.6)
+
+    step = max(1, n // 8)
+    tick_pos = list(range(0, n, step))
+    for a in (ax, vax):
+        a.set_xlim(-0.5, n - 0.5)
+        a.set_xticks(tick_pos)
+        a.tick_params(colors=TEXT, labelsize=8)
+        for spine in a.spines.values():
+            spine.set_edgecolor(GRID)
+        a.grid(axis="y", color=GRID, linewidth=0.5)
+
+    ax.set_xticklabels([])
+    vax.set_xticklabels(
+        [times[i].strftime("%m/%d %H:%M") for i in tick_pos],
+        rotation=30, ha="right", fontsize=7, color=TEXT,
+    )
+
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    vax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.2f}"))
+    ax.tick_params(axis="y", colors=TEXT)
+    vax.tick_params(axis="y", colors=TEXT)
+
+    last = closes[-1]
+    ax.axhline(last, color=TEXT, linewidth=0.6, linestyle="--", alpha=0.5)
+    ax.text(n - 0.3, last, f"  ${last:,.2f}", color=TEXT, fontsize=8, va="center")
+
+    pct   = (closes[-1] - opens[0]) / opens[0] * 100
+    sign  = "+" if pct >= 0 else ""
+    hours = _CHART_HOURS.get(interval, 24)
+    period = f"{hours}h" if hours < 24 * 7 else f"{hours // 24}d"
+    ax.set_title(
+        f"{coin}  {interval}  |  {period}: {sign}{pct:.2f}%   Last: ${last:,.2f}",
+        color=TEXT, fontsize=11, loc="left", pad=10,
+    )
+    ax.set_ylabel("Price (USDC)", color=TEXT, fontsize=8)
+    vax.set_ylabel("Vol", color=TEXT, fontsize=8)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=130, facecolor=BG, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage: /chart <coin> [interval]\n\n"
+            "Intervals: 5m  15m  1h  4h  1d\n"
+            "Default:   1h\n\n"
+            "Examples:\n"
+            "  /chart BTC\n"
+            "  /chart ETH 5m\n"
+            "  /chart SOL 4h"
+        )
+        return
+    coin     = args[0].upper()
+    interval = args[1].lower() if len(args) > 1 else "1h"
+    if interval not in _CHART_INTERVALS:
+        await update.message.reply_text(
+            f"Unknown interval '{interval}'.\n"
+            f"Valid: {', '.join(sorted(_CHART_INTERVALS))}"
+        )
+        return
+    msg = await update.message.reply_text(f"Fetching {coin} {interval} chart…")
+    try:
+        client = _get_client(update.effective_user.id)
+        hours   = _CHART_HOURS[interval]
+        candles = client.get_candles(coin, interval, hours=hours)
+        buf     = _build_chart(candles, coin, interval)
+        await update.message.reply_photo(photo=buf)
+        await msg.delete()
+    except Exception as e:
+        await msg.edit_text(f"Error: {e}")
+
+
 async def cmd_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
@@ -1523,6 +1648,7 @@ async def _post_init(app: Application):
         BotCommand("orders",      "Resting orders"),
         BotCommand("pnl",         "7-day realised PnL"),
         BotCommand("risk",        "Margin & liquidation risk"),
+        BotCommand("chart",       "Candlestick chart — /chart BTC 1h"),
         BotCommand("price",       "Current price — /price BTC"),
         BotCommand("alert",       "Set price alert — /alert BTC 70000"),
         BotCommand("alerts",      "List active alerts"),
@@ -1563,6 +1689,7 @@ def main():
         ("sl",          cmd_sl),
         ("cancel",      cmd_cancel),
         ("orders",      cmd_orders),
+        ("chart",       cmd_chart),
         ("price",       cmd_price),
         ("assets",      cmd_assets),
         ("pnl",         cmd_pnl),

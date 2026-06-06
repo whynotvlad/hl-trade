@@ -280,6 +280,21 @@ class HLClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_candles(self, coin: str, interval: str, hours: int = 24) -> list:
+        import time as _t, requests as _r
+        end_ms   = int(_t.time() * 1000)
+        start_ms = int((_t.time() - hours * 3600) * 1000)
+        resp = _r.post(
+            f"{self._base_url}/info",
+            json={"type": "candleSnapshot", "req": {
+                "coin": coin, "interval": interval,
+                "startTime": start_ms, "endTime": end_ms,
+            }},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def cancel_tpsl(self, coin: str, tpsl_type: str) -> list:
         """Cancel all TP or SL orders for a given coin. tpsl_type: 'tp' or 'sl'."""
         type_label = "Take Profit Market" if tpsl_type == "tp" else "Stop Market"
