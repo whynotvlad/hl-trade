@@ -269,15 +269,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text(
-            f"👋 Hey {name}! Welcome to hl\\-trade bot\\.\n\n"
-            "This bot lets you trade Hyperliquid perpetuals from your phone\\.\n\n"
-            "*Setup \\(one time\\):*\n"
-            "1\\. Generate an agent wallet — it can trade but cannot withdraw funds\n"
-            "2\\. Approve it at app\\.hyperliquid\\.xyz → Settings → API\n"
-            "3\\. Send /register with your keys\n\n"
-            "📖 Full setup guide: /help register\n\n"
-            "Once registered all commands become available\\.",
-            parse_mode="MarkdownV2"
+            f"👋 Hey {name}! Welcome to hl-trade bot.\n\n"
+            "This bot lets you trade Hyperliquid perpetuals from your phone.\n\n"
+            "Setup (one time):\n"
+            "1. Generate an agent wallet — it can trade but cannot withdraw funds\n"
+            "2. Approve it at app.hyperliquid.xyz → Settings → API\n"
+            "3. Send /register with your keys\n\n"
+            "Full setup guide: /help register\n\n"
+            "Once registered all commands become available."
         )
 
 
