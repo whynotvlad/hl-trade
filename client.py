@@ -186,6 +186,17 @@ class HLClient:
     def cancel_by_id(self, coin: str, oid: int) -> dict:
         return self.exchange.cancel(coin, oid)
 
+    def get_fills(self, days: int = 7) -> list:
+        import time as _t, requests as _r
+        start_ms = int((_t.time() - days * 86400) * 1000)
+        resp = _r.post(
+            f"{self._base_url}/info",
+            json={"type": "userFillsByTime", "user": self.address, "startTime": start_ms},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def cancel_tpsl(self, coin: str, tpsl_type: str) -> list:
         """Cancel all TP or SL orders for a given coin. tpsl_type: 'tp' or 'sl'."""
         type_label = "Take Profit Market" if tpsl_type == "tp" else "Stop Market"
