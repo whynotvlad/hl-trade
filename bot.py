@@ -45,7 +45,7 @@ _price_history: dict[str, list] = {}      # coin -> [(ts, price), ...] rolling 2
 _move_alerted: dict[str, float] = {}      # "{tg_id}_{coin}_{tier}" -> last alert ts
 _poll_errors: dict[int, int] = {}         # tg_id -> consecutive error count
 _poll_error_alerted: set = set()          # tg_ids already notified this error streak
-PRICE_HISTORY_FILE = "price_history.json"
+PRICE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "price_history.json")
 
 CONFIRM_TTL = 60
 POLL_INTERVAL = 30

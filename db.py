@@ -3,7 +3,7 @@ import os
 from typing import Optional
 from cryptography.fernet import Fernet
 
-DB_PATH = "users.db"
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.db")
 
 
 def _fernet() -> Fernet:
