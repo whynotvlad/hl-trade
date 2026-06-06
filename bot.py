@@ -33,7 +33,8 @@ _awaiting_price: dict[int, tuple[str, str]] = {}    # tg_id -> (action, coin), w
 CONFIRM_TTL = 60
 POLL_INTERVAL = 30
 LIQ_WARN_PCT = 15
-WEB_APP_URL = "https://whynotvlad.github.io/hl-trade/open.html?v=6"
+WEB_APP_URL    = "https://whynotvlad.github.io/hl-trade/open.html?v=7"
+LADDER_FORM_URL = "https://whynotvlad.github.io/hl-trade/ladder.html?v=1"
 
 QUICK_KEYS = ReplyKeyboardMarkup(
     [
@@ -293,8 +294,7 @@ def _fmt_orders(orders: list) -> str:
             f"{'🟢' if side == 'BUY' else '🔴'} {o.get('coin')} {side}\n"
             f"   Type:  {o.get('orderType')}\n"
             f"   Size:  {o.get('sz')}\n"
-            f"   Price: ${float(o.get('limitPx', 0)):,.2f}\n"
-            f"   ID:    {o.get('oid')}"
+            f"   Price: ${float(o.get('limitPx', 0)):,.2f}"
         )
     return "\n".join(lines)
 
@@ -808,8 +808,12 @@ async def cmd_ladder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if len(args) < 4:
         await update.message.reply_text(
-            "Usage: /ladder <coin> <parts> <from_price> <to_price>\n\n"
-            "Example: /ladder ETH 5 3500 3000\n\n/help ladder"
+            "Tap below to open the ladder form, or use:\n"
+            "/ladder <coin> <parts> <from> <to>",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("Close Position Form", web_app=WebAppInfo(url=LADDER_FORM_URL))]],
+                resize_keyboard=True, one_time_keyboard=True,
+            ),
         )
         return
     try:
@@ -885,8 +889,12 @@ async def cmd_slladder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if len(args) < 4:
         await update.message.reply_text(
-            "Usage: /slladder <coin> <parts> <from_price> <to_price>\n\n"
-            "Example: /slladder BTC 3 58000 55000\n\n/help slladder"
+            "Tap below to open the ladder form, or use:\n"
+            "/slladder <coin> <parts> <from> <to>",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("Close Position Form", web_app=WebAppInfo(url=LADDER_FORM_URL))]],
+                resize_keyboard=True, one_time_keyboard=True,
+            ),
         )
         return
     try:
@@ -1520,6 +1528,46 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
     import json
     try:
         data = json.loads(update.message.web_app_data.data)
+        form_type = data.get("form_type", "open")
+
+        if form_type == "ladder":
+            coin        = data["coin"].upper()
+            ladder_type = data["ladder_type"]  # "ladder" or "slladder"
+            n_parts     = int(data["parts"])
+            from_price  = float(data["from_price"])
+            to_price    = float(data["to_price"])
+
+            client = _get_client(update.effective_user.id)
+
+            type_label = "📊 Limit Ladder" if ladder_type == "ladder" else "🛑 SL Trigger Ladder"
+            prices = [
+                round(from_price + (to_price - from_price) * i / (n_parts - 1), 2)
+                for i in range(n_parts)
+            ]
+            pct_each = round(100 / n_parts, 1)
+            levels_text = "\n".join(
+                f"   {i+1}. {pct_each}% @ ${px:,.2f}" for i, px in enumerate(prices)
+            )
+            preview = (
+                f"Ladder Preview\n\n"
+                f"{type_label} — {n_parts} orders for {coin}\n\n"
+                f"{levels_text}\n\n"
+                f"Send /confirm to execute or /dismiss to cancel.\n"
+                f"Expires in {CONFIRM_TTL}s."
+            )
+            fn = (
+                (lambda c=coin, n=n_parts, fp=from_price, tp=to_price:
+                 client.ladder_close(c, n, fp, tp))
+                if ladder_type == "ladder"
+                else
+                (lambda c=coin, n=n_parts, fp=from_price, tp=to_price:
+                 client.slladder_close(c, n, fp, tp))
+            )
+            _store_pending(update.effective_user.id, preview, fn)
+            await update.message.reply_text(preview)
+            return
+
+        # Default: open order form
         coin        = data["coin"].upper()
         side        = data["side"]
         size        = float(data["size"])

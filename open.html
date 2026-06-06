@@ -6,104 +6,175 @@
   <title>Open Trade</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
-    body { font-family: -apple-system, sans-serif; background: #18181b; color: #fafafa; padding: 16px 16px 120px; font-size: 15px; }
-    h1 { font-size: 18px; margin-bottom: 20px; }
-    .lbl { font-size: 12px; font-weight: 600; text-transform: uppercase; color: #71717a; margin: 16px 0 8px; }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    button.tog {
-      padding: 14px; border: 2px solid #27272a; border-radius: 12px;
-      background: #27272a; color: #71717a; font-size: 15px; font-weight: 700; cursor: pointer;
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f0f12;
+      color: #f4f4f5;
+      padding: 16px 16px 110px;
+      font-size: 15px;
+      margin: 0;
     }
-    button.tog.on-long  { border-color: #16a34a; color: #16a34a; background: rgba(22,163,74,.15); }
-    button.tog.on-short { border-color: #dc2626; color: #dc2626; background: rgba(220,38,38,.15); }
-    button.tog.on-blue  { border-color: #2563eb; color: #2563eb; background: rgba(37,99,235,.15); }
+    .header {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 24px; padding-bottom: 16px;
+      border-bottom: 1px solid #27272a;
+    }
+    .header-icon { font-size: 22px; }
+    .header h1 { font-size: 18px; font-weight: 700; margin: 0; }
+    .header p  { font-size: 12px; color: #71717a; margin: 2px 0 0; }
+
+    .section { margin-bottom: 20px; }
+    .lbl {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .06em; color: #52525b; margin-bottom: 8px;
+    }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+    button.tog {
+      padding: 13px 10px; border: 1.5px solid #27272a; border-radius: 12px;
+      background: #1c1c20; color: #52525b;
+      font-size: 14px; font-weight: 700; cursor: pointer; width: 100%;
+      transition: border-color .15s, color .15s, background .15s;
+    }
+    button.tog.on-long  { border-color: #16a34a; color: #22c55e; background: rgba(22,163,74,.12); }
+    button.tog.on-short { border-color: #dc2626; color: #f87171; background: rgba(220,38,38,.12); }
+    button.tog.on-blue  { border-color: #2563eb; color: #60a5fa; background: rgba(37,99,235,.12); }
+
     input[type=text], input[type=number] {
       width: 100%; padding: 13px 14px; border-radius: 12px;
-      border: 2px solid #27272a; background: #27272a; color: #fafafa;
-      font-size: 16px; outline: none; -webkit-appearance: none; box-sizing: border-box;
+      border: 1.5px solid #27272a; background: #1c1c20; color: #f4f4f5;
+      font-size: 16px; outline: none; -webkit-appearance: none;
+      transition: border-color .15s;
     }
+    input:focus { border-color: #3f3f46; }
+
     .chips { display: flex; gap: 8px; flex-wrap: wrap; }
     .chip {
-      padding: 10px 16px; border-radius: 999px; border: 2px solid #27272a;
-      background: #27272a; color: #71717a; font-size: 14px; font-weight: 600; cursor: pointer;
+      padding: 9px 18px; border-radius: 999px; border: 1.5px solid #27272a;
+      background: #1c1c20; color: #52525b;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+      transition: border-color .15s, color .15s, background .15s;
     }
-    .chip.on { border-color: #2563eb; color: #2563eb; background: rgba(37,99,235,.15); }
-    #summary { background: #27272a; border-radius: 12px; padding: 12px 14px; font-size: 13px; color: #71717a; margin-top: 16px; }
+    .chip.on { border-color: #2563eb; color: #60a5fa; background: rgba(37,99,235,.12); }
+
+    .preview-card {
+      background: #1c1c20; border: 1.5px solid #27272a;
+      border-radius: 14px; padding: 14px 16px;
+      font-size: 13px; color: #71717a; line-height: 1.65;
+      margin-top: 4px;
+    }
+    .preview-card .preview-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .06em; color: #52525b; margin-bottom: 8px;
+    }
+    .preview-card .val { color: #f4f4f5; font-weight: 600; }
+
+    .divider { height: 1px; background: #27272a; margin: 20px 0; }
+
     #go {
-      width: 100%; padding: 16px; margin-top: 16px;
+      width: 100%; padding: 16px; margin-top: 4px;
       background: #2563eb; color: #fff;
-      border: none; border-radius: 12px; font-size: 17px; font-weight: 700; cursor: pointer;
+      border: none; border-radius: 14px;
+      font-size: 17px; font-weight: 700; cursor: pointer;
+      transition: opacity .15s;
     }
+    #go:active { opacity: .85; }
+    #go.long  { background: #16a34a; }
+    #go.short { background: #dc2626; }
   </style>
 </head>
 <body>
 
-<h1>Open Trade</h1>
-
-<div class="lbl">Side</div>
-<div class="row">
-  <button class="tog on-long" id="b-long"  onclick="setSide('long')">🟢 Long</button>
-  <button class="tog"         id="b-short" onclick="setSide('short')">🔴 Short</button>
+<div class="header">
+  <span class="header-icon">⚡</span>
+  <div>
+    <h1>Open Trade</h1>
+    <p>Perpetuals — market or limit</p>
+  </div>
 </div>
 
-<div class="lbl">Coin</div>
-<input type="text" id="coin" placeholder="BTC, ETH, SOL..." list="coins"
-       oninput="this.value=this.value.toUpperCase();upd()" />
-<datalist id="coins">
-  <option value="BTC"/><option value="ETH"/><option value="SOL"/>
-  <option value="AVAX"/><option value="ARB"/><option value="DOGE"/>
-  <option value="LINK"/><option value="OP"/><option value="APT"/>
-</datalist>
-
-<div class="lbl">Size</div>
-<input type="number" id="size" placeholder="e.g. 0.001" step="any" min="0" oninput="upd()" />
-
-<div class="lbl">Leverage</div>
-<div class="chips">
-  <div class="chip"    id="l2"  onclick="setLev(2)">2x</div>
-  <div class="chip on" id="l5"  onclick="setLev(5)">5x</div>
-  <div class="chip"    id="l10" onclick="setLev(10)">10x</div>
-  <div class="chip"    id="l20" onclick="setLev(20)">20x</div>
+<div class="section">
+  <div class="lbl">Direction</div>
+  <div class="row2">
+    <button class="tog on-long"  id="b-long"  onclick="setSide('long')">🟢 Long</button>
+    <button class="tog"          id="b-short" onclick="setSide('short')">🔴 Short</button>
+  </div>
 </div>
 
-<div class="lbl">Order Type</div>
-<div class="row">
-  <button class="tog on-blue" id="b-mkt" onclick="setType('market')">Market</button>
-  <button class="tog"         id="b-lmt" onclick="setType('limit')">Limit</button>
-</div>
-<div id="lmt-row" style="display:none;margin-top:10px">
-  <input type="number" id="lmt-px" placeholder="Limit price $" step="any" min="0" oninput="upd()" />
-</div>
-
-<div class="lbl">TP / SL (optional)</div>
-<div class="row">
-  <input type="number" id="tp" placeholder="Take profit $" step="any" min="0" />
-  <input type="number" id="sl" placeholder="Stop loss $"  step="any" min="0" />
+<div class="section">
+  <div class="lbl">Coin</div>
+  <input type="text" id="coin" placeholder="BTC, ETH, SOL …" list="coins"
+         oninput="this.value=this.value.toUpperCase();upd()" autocomplete="off" />
+  <datalist id="coins">
+    <option value="BTC"/><option value="ETH"/><option value="SOL"/>
+    <option value="AVAX"/><option value="ARB"/><option value="DOGE"/>
+    <option value="LINK"/><option value="OP"/><option value="APT"/>
+  </datalist>
 </div>
 
-<div id="summary">Fill in coin and size above.</div>
+<div class="section">
+  <div class="lbl">Size (base coin)</div>
+  <input type="number" id="size" placeholder="e.g. 0.001" step="any" min="0" oninput="upd()" />
+</div>
 
-<button id="go" onclick="placeOrder()">Preview Order</button>
+<div class="section">
+  <div class="lbl">Leverage</div>
+  <div class="chips">
+    <div class="chip"    id="l2"  onclick="setLev(2)">2×</div>
+    <div class="chip on" id="l5"  onclick="setLev(5)">5×</div>
+    <div class="chip"    id="l10" onclick="setLev(10)">10×</div>
+    <div class="chip"    id="l20" onclick="setLev(20)">20×</div>
+  </div>
+</div>
 
+<div class="section">
+  <div class="lbl">Order Type</div>
+  <div class="row2">
+    <button class="tog on-blue" id="b-mkt" onclick="setType('market')">Market</button>
+    <button class="tog"         id="b-lmt" onclick="setType('limit')">Limit</button>
+  </div>
+  <div id="lmt-row" style="display:none;margin-top:10px">
+    <input type="number" id="lmt-px" placeholder="Limit price $" step="any" min="0" oninput="upd()" />
+  </div>
+</div>
+
+<div class="section">
+  <div class="lbl">TP / SL (optional)</div>
+  <div class="row2">
+    <input type="number" id="tp" placeholder="Take profit $" step="any" min="0" />
+    <input type="number" id="sl" placeholder="Stop loss $"   step="any" min="0" />
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<div class="preview-card">
+  <div class="preview-title">Preview</div>
+  <div id="summary">Fill in coin and size to see a summary.</div>
+</div>
+
+<button id="go" class="long" onclick="placeOrder()">Preview Order</button>
 
 <script>
 var tg = null;
-try { tg = window.Telegram.WebApp; tg.ready(); tg.expand(); } catch(e) {}
+try { tg = window.Telegram.WebApp; tg.ready(); tg.expand(); if (tg.MainButton) tg.MainButton.hide(); } catch(e) {}
 
-var side = 'long';
-var lev  = 5;
+var side  = 'long';
+var lev   = 5;
 var otype = 'market';
 
 function setSide(s) {
   side = s;
   document.getElementById('b-long').className  = 'tog' + (s === 'long'  ? ' on-long'  : '');
   document.getElementById('b-short').className = 'tog' + (s === 'short' ? ' on-short' : '');
+  document.getElementById('go').className = s === 'long' ? 'long' : 'short';
   upd();
 }
 
 function setLev(n) {
   lev = n;
-  var ids = ['l2','l5','l10','l20'];
+  var ids  = ['l2','l5','l10','l20'];
   var vals = [2, 5, 10, 20];
   for (var i = 0; i < ids.length; i++) {
     document.getElementById(ids[i]).className = 'chip' + (vals[i] === n ? ' on' : '');
@@ -119,30 +190,51 @@ function setType(t) {
   upd();
 }
 
+function fmt(n) {
+  return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
 function upd() {
-  var coin = document.getElementById('coin').value.trim() || '—';
-  var size = document.getElementById('size').value.trim();
+  var coin = document.getElementById('coin').value.trim();
+  var size = parseFloat(document.getElementById('size').value);
   var el   = document.getElementById('summary');
-  if (!coin || coin === '—' || !size) { el.textContent = 'Fill in coin and size above.'; return; }
-  var dir  = side === 'long' ? '🟢 Long' : '🔴 Short';
-  var px   = otype === 'limit' ? (' @ $' + (document.getElementById('lmt-px').value || '?')) : ' @ market';
-  el.textContent = dir + ' ' + size + ' ' + coin + px + ' ' + lev + 'x';
+  if (!coin || isNaN(size) || size <= 0) {
+    el.innerHTML = 'Fill in coin and size to see a summary.';
+    return;
+  }
+  var lmtpx = parseFloat(document.getElementById('lmt-px').value);
+  var px    = (otype === 'limit' && !isNaN(lmtpx)) ? lmtpx : null;
+  var dir   = side === 'long' ? '🟢 Long' : '🔴 Short';
+  var pxLbl = px ? ('$' + fmt(px) + ' limit') : 'market price';
+
+  var tp = parseFloat(document.getElementById('tp').value);
+  var sl = parseFloat(document.getElementById('sl').value);
+  var extras = '';
+  if (!isNaN(tp) && tp > 0) extras += '<br>Take-profit: <span class="val">$' + fmt(tp) + '</span>';
+  if (!isNaN(sl) && sl > 0) extras += '<br>Stop-loss: <span class="val">$' + fmt(sl) + '</span>';
+
+  el.innerHTML =
+    dir + ' <span class="val">' + size + ' ' + coin + '</span>' +
+    ' @ <span class="val">' + pxLbl + '</span><br>' +
+    'Leverage: <span class="val">' + lev + '×</span>' +
+    extras;
 }
 
 function placeOrder() {
   try {
-    var coin = document.getElementById('coin').value.trim().toUpperCase();
-    var size = document.getElementById('size').value.trim();
+    var coin  = document.getElementById('coin').value.trim().toUpperCase();
+    var size  = document.getElementById('size').value.trim();
     var lmtpx = document.getElementById('lmt-px').value.trim();
-    var tp   = document.getElementById('tp').value.trim();
-    var sl   = document.getElementById('sl').value.trim();
+    var tp    = document.getElementById('tp').value.trim();
+    var sl    = document.getElementById('sl').value.trim();
 
-    if (!coin)        { alert('Enter a coin, e.g. BTC'); return; }
-    if (!size || parseFloat(size) <= 0) { alert('Enter a size, e.g. 0.001'); return; }
-    if (lev < 1 || lev > 50)           { alert('Leverage must be 1-50'); return; }
-    if (otype === 'limit' && !lmtpx)   { alert('Enter a limit price'); return; }
+    if (!coin)                              { showAlert('Enter a coin, e.g. BTC'); return; }
+    if (!size || parseFloat(size) <= 0)     { showAlert('Enter a valid size'); return; }
+    if (lev < 1 || lev > 50)               { showAlert('Leverage must be 1–50'); return; }
+    if (otype === 'limit' && !lmtpx)        { showAlert('Enter a limit price'); return; }
 
     var payload = JSON.stringify({
+      form_type: 'open',
       coin: coin, side: side, size: size, leverage: String(lev),
       order_type: otype, limit_price: lmtpx, tp: tp, sl: sl
     });
@@ -150,11 +242,15 @@ function placeOrder() {
     if (tg && tg.sendData) {
       tg.sendData(payload);
     } else {
-      alert('Not in Telegram. Payload: ' + payload);
+      alert('Not in Telegram. Payload:\n' + payload);
     }
   } catch(e) {
-    alert('Error: ' + e.message);
+    showAlert('Error: ' + e.message);
   }
+}
+
+function showAlert(msg) {
+  try { tg.showAlert(msg); } catch(_) { alert(msg); }
 }
 </script>
 </body>
