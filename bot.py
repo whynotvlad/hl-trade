@@ -24,7 +24,7 @@ try:
     fcntl.flock(_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
 except OSError:
     logging.error("Another bot instance is already running — exiting.")
-    sys.exit(1)
+    sys.exit(77)  # 77 = already running; service file suppresses restart on this code
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
