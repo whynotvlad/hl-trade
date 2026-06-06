@@ -242,6 +242,13 @@
 
   <div class="error" id="error"></div>
 
+  <button onclick="submit()" style="
+    width:100%; padding:15px; margin-top:8px;
+    background:var(--accent); color:var(--accent-t);
+    border:none; border-radius:var(--radius);
+    font-size:16px; font-weight:700; cursor:pointer;
+  ">Preview Order</button>
+
   <script>
     const tg = window.Telegram.WebApp;
     tg.ready();
@@ -326,11 +333,13 @@
       return true;
     }
 
-    function show(el, msg) { el.textContent = msg; el.classList.add('show'); }
+    function show(el, msg) {
+      el.textContent = msg;
+      el.classList.add('show');
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
 
-    tg.MainButton.setText('Preview Order');
-    tg.MainButton.show();
-    tg.MainButton.onClick(() => {
+    function submit() {
       if (!validate()) return;
       const payload = {
         coin:        document.getElementById('coin').value.trim().toUpperCase(),
@@ -342,8 +351,16 @@
         tp:          document.getElementById('tp').value.trim() || '',
         sl:          document.getElementById('sl').value.trim() || '',
       };
-      tg.sendData(JSON.stringify(payload));
-    });
+      try {
+        tg.sendData(JSON.stringify(payload));
+      } catch(e) {
+        alert('Could not send order: ' + e.message);
+      }
+    }
+
+    tg.MainButton.setText('Preview Order');
+    tg.MainButton.show();
+    tg.MainButton.onClick(submit);
 
     updateSummary();
   </script>
