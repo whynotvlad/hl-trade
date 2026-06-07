@@ -52,6 +52,8 @@ CONFIRM_TTL = 60
 POLL_INTERVAL = 30
 LIQ_WARN_PCT = 15
 DIGEST_TIME = datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc)  # midnight UTC
+# Auto /overview window: 09:00–20:00 UTC+2 == 07:00–18:00 UTC, sent on the hour
+OVERVIEW_HOURS_UTC = range(7, 19)
 MOVE_1H_PCT  = 3.0    # % move in 1 hour to trigger quick-move alert
 MOVE_24H_PCT = 8.0    # % move in 24 hours to trigger big-move alert
 MOVE_COOLDOWN = 2 * 3600  # seconds before re-alerting same coin+tier
@@ -1159,41 +1161,45 @@ async def handle_chart_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await context.bot.send_message(chat_id=tg_id, text=f"Error: {e}")
 
 
+def _build_overview_charts(client) -> list:
+    prices = client.get_prices()
+    ctx    = client.get_asset_contexts()
+
+    charts = []
+    for coin in ("BTC", "ETH"):
+        candles = client.get_candles(coin, "1h", hours=24)
+        buf     = _build_chart(candles, coin, "1h")
+
+        px      = float(prices.get(coin, 0))
+        hi      = max(float(c["h"]) for c in candles)
+        lo      = min(float(c["l"]) for c in candles)
+        open24  = float(candles[0]["o"]) if candles else px
+        chg_pct = (px - open24) / open24 * 100 if open24 else 0
+        chg_sign = "+" if chg_pct >= 0 else ""
+        chg_emoji = "📈" if chg_pct >= 0 else "📉"
+
+        funding_raw = ctx.get(coin, {}).get("funding")
+        oi_raw      = ctx.get(coin, {}).get("openInterest")
+        funding_str = f"{float(funding_raw)*100:+.4f}%/8h" if funding_raw is not None else "n/a"
+        oi_str      = f"${float(oi_raw)/1e9:.2f}B" if oi_raw is not None else "n/a"
+
+        caption = (
+            f"{chg_emoji} <b>{coin}</b>  ${px:,.2f}\n"
+            f"24h: <b>{chg_sign}{chg_pct:.2f}%</b>   "
+            f"H ${hi:,.2f}  /  L ${lo:,.2f}\n"
+            f"Funding: <b>{funding_str}</b>   OI: {oi_str}"
+        )
+        charts.append((buf, caption))
+    return charts
+
+
 async def cmd_overview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
     await update.message.reply_text("Fetching overview…")
     try:
         client = _get_client(update.effective_user.id)
-        prices = client.get_prices()
-        ctx    = client.get_asset_contexts()
-
-        charts = []
-        for coin in ("BTC", "ETH"):
-            candles = client.get_candles(coin, "1h", hours=24)
-            buf     = _build_chart(candles, coin, "1h")
-
-            px      = float(prices.get(coin, 0))
-            hi      = max(float(c["h"]) for c in candles)
-            lo      = min(float(c["l"]) for c in candles)
-            open24  = float(candles[0]["o"]) if candles else px
-            chg_pct = (px - open24) / open24 * 100 if open24 else 0
-            chg_sign = "+" if chg_pct >= 0 else ""
-            chg_emoji = "📈" if chg_pct >= 0 else "📉"
-
-            funding_raw = ctx.get(coin, {}).get("funding")
-            oi_raw      = ctx.get(coin, {}).get("openInterest")
-            funding_str = f"{float(funding_raw)*100:+.4f}%/8h" if funding_raw is not None else "n/a"
-            oi_str      = f"${float(oi_raw)/1e9:.2f}B" if oi_raw is not None else "n/a"
-
-            caption = (
-                f"{chg_emoji} <b>{coin}</b>  ${px:,.2f}\n"
-                f"24h: <b>{chg_sign}{chg_pct:.2f}%</b>   "
-                f"H ${hi:,.2f}  /  L ${lo:,.2f}\n"
-                f"Funding: <b>{funding_str}</b>   OI: {oi_str}"
-            )
-            charts.append((buf, caption))
-
+        charts = _build_overview_charts(client)
         for buf, caption in charts:
             await update.message.reply_photo(photo=buf, caption=caption, parse_mode="HTML")
 
@@ -1992,6 +1998,26 @@ async def _daily_digest(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.05)  # 20 msg/s — safely under Telegram's 30/s limit
 
 
+async def _send_overview_to_user(bot, tg_id: int):
+    try:
+        client = _get_client(tg_id)
+        charts = _build_overview_charts(client)
+        for buf, caption in charts:
+            await bot.send_photo(chat_id=tg_id, photo=buf, caption=caption, parse_mode="HTML")
+    except Exception as e:
+        logging.warning(f"Hourly overview failed for {tg_id}: {e}")
+
+
+async def _hourly_overview(context: ContextTypes.DEFAULT_TYPE):
+    import asyncio
+    users = db.get_all_registered_users()
+    for user in users:
+        tg_id = user["tg_id"]
+        if _is_allowed(tg_id):
+            await _send_overview_to_user(context.bot, tg_id)
+            await asyncio.sleep(0.05)  # 20 msg/s — safely under Telegram's 30/s limit
+
+
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
@@ -2229,7 +2255,7 @@ async def _poll_notifications(context: ContextTypes.DEFAULT_TYPE):
 async def _post_init(app: Application):
     await app.bot.set_my_commands([
         # ── top-level actions ────────────────────────────
-        BotCommand("overview",    "BTC & ETH charts, prices, funding rates"),
+        BotCommand("overview",    "BTC & ETH charts, prices, funding rates (also sent hourly 09–20 UTC+2)"),
         BotCommand("book",        "Positions + orders + balance (full book)"),
         BotCommand("positions",   "Alias for /book"),
         BotCommand("open",        "Open a position"),
@@ -2305,6 +2331,11 @@ def main():
     app.job_queue.run_repeating(_poll_notifications, interval=POLL_INTERVAL, first=15)
     app.job_queue.run_repeating(_persist_price_history, interval=300, first=300)  # every 5 min
     app.job_queue.run_daily(_daily_digest, time=DIGEST_TIME)
+    for hour in OVERVIEW_HOURS_UTC:
+        app.job_queue.run_daily(
+            _hourly_overview,
+            time=datetime.time(hour=hour, minute=0, tzinfo=datetime.timezone.utc),
+        )
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(CallbackQueryHandler(handle_close_callback, pattern="^(close_pct:|close_partial:|set_tp:|set_sl:)"))
     app.add_handler(CallbackQueryHandler(handle_chart_callback, pattern="^chart_tf:"))
